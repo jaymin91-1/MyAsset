@@ -1,6 +1,8 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 from datetime import datetime
 import requests
 from streamlit_gsheets import GSheetsConnection
@@ -8,7 +10,7 @@ from streamlit_gsheets import GSheetsConnection
 # -----------------------------------------------------------------------------
 # 1. 페이지 설정
 # -----------------------------------------------------------------------------
-st.set_page_config(layout="wide", page_title="Asset Management Program", page_icon="💰")
+st.set_page_config(layout="wide", page_title="우리집 가계부", page_icon="🏠")
 
 # 스타일 설정
 st.markdown("""
@@ -17,7 +19,7 @@ st.markdown("""
         color: red !important;
     }
     .big-font {
-        font-size: 18px !important;
+        font-size: 20px !important;
         font-weight: bold;
     }
 </style>
@@ -33,7 +35,8 @@ CURRENCY_CONFIG = {
 }
 
 DEFAULT_CATEGORIES = ['식비', '교통비', '쇼핑', '통신비', '주거비', '의료비', '월급', '보너스', '배당금', '기타']
-COLOR_SEQUENCE = px.colors.qualitative.Pastel
+# 파스텔 톤 색상 팔레트 정의
+PASTEL_COLORS = px.colors.qualitative.Pastel
 
 conn = st.connection("gsheets", type=GSheetsConnection)
 
@@ -59,7 +62,7 @@ def save_data(df, sheet_name):
         df_save = df.copy()
         df_save['날짜'] = df_save['날짜'].dt.strftime('%Y-%m-%d')
         conn.update(worksheet=sheet_name, data=df_save)
-        st.toast("✅ 데이터가 성공적으로 저장/삭제되었습니다.", icon="👌")
+        st.toast("✅ 데이터가 성공적으로 저장되었습니다.", icon="👌")
     except Exception as e:
         st.error(f"저장 실패: {e}")
 
@@ -89,7 +92,8 @@ def get_exchange_rates_krw_base():
 # -----------------------------------------------------------------------------
 # 3. 초기화 및 데이터 로드
 # -----------------------------------------------------------------------------
-st.title("💰 클라우드 자산관리")
+# [요구사항 4] 메인 이름 변경
+st.title("🏠 우리집 가계부")
 
 if 'current_currency_code' not in st.session_state:
     st.session_state['current_currency_code'] = "KRW"
@@ -98,6 +102,7 @@ if 'custom_categories' not in st.session_state:
 if 'rates' not in st.session_state:
     st.session_state['rates'] = get_exchange_rates_krw_base()
 
+# 국가 선택 라디오 버튼
 selected_code_key = st.radio(
     "국가 선택:",
     options=list(CURRENCY_CONFIG.keys()),
@@ -123,7 +128,7 @@ if not df.empty and '카테고리' in df.columns:
 final_categories = sorted(list(set(DEFAULT_CATEGORIES + existing_cats + st.session_state['custom_categories'])))
 
 # -----------------------------------------------------------------------------
-# 4. 사이드바 (자산 현황 업데이트)
+# 4. 사이드바 (자산 현황)
 # -----------------------------------------------------------------------------
 with st.sidebar:
     st.header("🗂️ 메뉴")
@@ -160,7 +165,7 @@ with st.sidebar:
         
         st.divider()
         
-        # [요구사항 3] 각 계좌별 잔액 계산
+        # 각 계좌별 잔액 계산
         net_assets = {}
         for code, conf in CURRENCY_CONFIG.items():
             _df = load_data(conf['sheet_name'])
@@ -175,7 +180,6 @@ with st.sidebar:
         net_twd = net_assets['TWD']
         net_usd = net_assets['USD']
         
-        # [요구사항 3] 개별 잔액 표시
         st.subheader("🏦 통화별 보유 잔액")
         st.write(f"🇰🇷 KRW: **{net_krw:,.0f}** 원")
         st.write(f"🇺🇸 USD: **{net_usd:,.2f}** $")
@@ -221,57 +225,192 @@ with st.expander("입력창 열기", expanded=True):
                 st.rerun()
 
 # -----------------------------------------------------------------------------
-# 6. 차트 및 현황
+# 6. 차트 및 분석 (대폭 수정됨)
 # -----------------------------------------------------------------------------
 st.divider()
-selected_year = datetime.now().year 
 
 if not df.empty and '금액' in df.columns:
     df['금액_숫자'] = df['금액'].apply(parse_currency)
+    
+    # 연도 선택
+    current_year = datetime.now().year
     years = sorted(df['날짜'].dt.year.unique(), reverse=True)
-    if not years: years = [datetime.now().year]
-    selected_year = st.selectbox("📅 분석할 연도:", years)
+    if not years: years = [current_year]
+    selected_year = st.selectbox("📅 분석할 연도 선택:", years)
     
-    # 연도 데이터 필터링
-    df_year = df[df['날짜'].dt.year == selected_year].copy()
+    # 탭 구성: 연도별 흐름 복구됨
+    tab_chart1, tab_chart2, tab_chart3 = st.tabs(["📊 월별 흐름", "🍩 지출 분석 (카테고리)", "📈 연도별 흐름"])
     
-    if not df_year.empty:
-        # 차트 탭 (차트는 연도 전체 흐름을 보여주는 게 좋으므로 월 필터 영향 안 받게 설정)
-        tab_chart1, tab_chart2 = st.tabs(["📊 월별 흐름", "🍩 카테고리 분석"])
+    # ---------------------------
+    # Tab 1: 월별 흐름 (1~12월 고정 + 수입-지출 선 그래프)
+    # ---------------------------
+    with tab_chart1:
+        # 해당 연도 데이터 필터링
+        df_year = df[df['날짜'].dt.year == selected_year].copy()
+        df_year['Month'] = df_year['날짜'].dt.month
         
-        with tab_chart1:
-            df_year['Month'] = df_year['날짜'].dt.month
-            m_sum = df_year.groupby(['Month', '구분'])['금액_숫자'].sum().reset_index()
-            fig = px.bar(m_sum, x='Month', y='금액_숫자', color='구분', barmode='group',
-                         color_discrete_map={'수입': '#A8E6CF', '지출': '#FF8B94'}, text_auto=',')
-            st.plotly_chart(fig, use_container_width=True)
+        # 1월 ~ 12월 기본 프레임 생성 (요구사항 3: 데이터 없어도 표기)
+        all_months = pd.DataFrame({'Month': range(1, 13)})
+        
+        # 월별 수입/지출 집계
+        monthly_grp = df_year.groupby(['Month', '구분'])['금액_숫자'].sum().reset_index()
+        monthly_pivot = monthly_grp.pivot(index='Month', columns='구분', values='금액_숫자').fillna(0).reset_index()
+        
+        # 기본 프레임과 병합하여 누락된 월 채우기
+        final_monthly = pd.merge(all_months, monthly_pivot, on='Month', how='left').fillna(0)
+        if '수입' not in final_monthly.columns: final_monthly['수입'] = 0
+        if '지출' not in final_monthly.columns: final_monthly['지출'] = 0
+        
+        # 순수익(수입-지출) 계산
+        final_monthly['순수익'] = final_monthly['수입'] - final_monthly['지출']
 
-        with tab_chart2:
-            exp_df = df_year[df_year['구분'] == '지출']
-            if not exp_df.empty:
-                cat_sum = exp_df.groupby('카테고리')['금액_숫자'].sum().reset_index()
-                fig_pie = px.pie(cat_sum, values='금액_숫자', names='카테고리', color_discrete_sequence=COLOR_SEQUENCE)
-                fig_pie.update_layout(height=350)
+        # [요구사항 3] 복합 그래프 그리기 (막대: 수입/지출, 선: 순수익)
+        fig_monthly = go.Figure()
+
+        # 막대: 수입
+        fig_monthly.add_trace(go.Bar(
+            x=final_monthly['Month'], y=final_monthly['수입'],
+            name='수입', marker_color='#A8E6CF' # 파스텔 민트
+        ))
+        # 막대: 지출
+        fig_monthly.add_trace(go.Bar(
+            x=final_monthly['Month'], y=final_monthly['지출'],
+            name='지출', marker_color='#FF8B94' # 파스텔 레드
+        ))
+        # 선: 순수익
+        fig_monthly.add_trace(go.Scatter(
+            x=final_monthly['Month'], y=final_monthly['순수익'],
+            name='순수익 (수입-지출)', mode='lines+markers',
+            line=dict(color='blue', width=2),
+            marker=dict(size=6)
+        ))
+
+        fig_monthly.update_layout(
+            title=f"{selected_year}년 월별 자산 흐름",
+            xaxis=dict(tickmode='linear', dtick=1, range=[0.5, 12.5], title='월'),
+            yaxis=dict(title='금액'),
+            barmode='group',
+            height=400,
+            hovermode="x unified"
+        )
+        st.plotly_chart(fig_monthly, use_container_width=True)
+
+    # ---------------------------
+    # Tab 2: 카테고리 분석 (막대 복구 + 파이 + 순위별 정렬)
+    # ---------------------------
+    with tab_chart2:
+        df_exp_year = df[(df['날짜'].dt.year == selected_year) & (df['구분'] == '지출')]
+        
+        if not df_exp_year.empty:
+            # 카테고리별 합계 계산 및 정렬 (많은 순)
+            cat_sum = df_exp_year.groupby('카테고리')['금액_숫자'].sum().reset_index()
+            cat_sum = cat_sum.sort_values('금액_숫자', ascending=False) # [요구사항 2] 내림차순 정렬
+
+            col_c1, col_c2 = st.columns(2)
+            
+            with col_c1:
+                # [요구사항 2] 원 그래프 (파스텔 톤)
+                fig_pie = px.pie(
+                    cat_sum, values='금액_숫자', names='카테고리',
+                    title="카테고리 비중",
+                    color_discrete_sequence=PASTEL_COLORS
+                )
+                fig_pie.update_traces(textposition='inside', textinfo='percent+label')
+                fig_pie.update_layout(height=350, margin=dict(t=30, b=0, l=0, r=0))
                 st.plotly_chart(fig_pie, use_container_width=True)
-    else:
-        st.info("해당 연도 데이터가 없습니다.")
+
+            with col_c2:
+                # [요구사항 2] 막대 그래프 복구 (많이 사용한 순, 파스텔 톤)
+                # 가로 막대 그래프가 순위 보기에 더 좋음
+                fig_bar = px.bar(
+                    cat_sum, x='금액_숫자', y='카테고리', orientation='h',
+                    title="지출 순위 (Top Spending)",
+                    text_auto=',',
+                    color='카테고리', 
+                    color_discrete_sequence=PASTEL_COLORS
+                )
+                # y축 정렬: 위쪽이 큰 값이 오도록 (total ascending + orientation h 하면 반대라 total ascending을 써야 위가 큼)
+                fig_bar.update_layout(
+                    showlegend=False, 
+                    yaxis=dict(categoryorder='total ascending'), # 큰게 위로 가도록
+                    height=350, 
+                    margin=dict(t=30, b=0, l=0, r=0)
+                )
+                st.plotly_chart(fig_bar, use_container_width=True)
+        else:
+            st.info("이 해에는 지출 내역이 없습니다.")
+
+    # ---------------------------
+    # Tab 3: 연도별 흐름 (전체 데이터 + 총자산 증감 선 그래프)
+    # ---------------------------
+    with tab_chart3:
+        # [요구사항 1] 연별 그래프 복구 및 총자산 증감 선 추가
+        # 전체 데이터 기준 연도별 집계
+        yearly_grp = df.groupby([df['날짜'].dt.year.rename('Year'), '구분'])['금액_숫자'].sum().reset_index()
+        yearly_pivot = yearly_grp.pivot(index='Year', columns='구분', values='금액_숫자').fillna(0).reset_index()
+        
+        if '수입' not in yearly_pivot.columns: yearly_pivot['수입'] = 0
+        if '지출' not in yearly_pivot.columns: yearly_pivot['지출'] = 0
+        
+        # 총자산 증감 계산 (해당 연도의 순수익을 누적)
+        # 만약 전체 자산의 절대값을 원하면 초기 자산이 필요하지만, 여기선 '흐름'이므로 누적 순수익으로 표현
+        yearly_pivot['순수익'] = yearly_pivot['수입'] - yearly_pivot['지출']
+        yearly_pivot['총자산_누적'] = yearly_pivot['순수익'].cumsum()
+
+        # 이중 축 그래프 생성
+        fig_year = make_subplots(specs=[[{"secondary_y": True}]])
+
+        # 막대: 수입
+        fig_year.add_trace(go.Bar(
+            x=yearly_pivot['Year'], y=yearly_pivot['수입'],
+            name='수입', marker_color='#A8E6CF'
+        ), secondary_y=False)
+
+        # 막대: 지출
+        fig_year.add_trace(go.Bar(
+            x=yearly_pivot['Year'], y=yearly_pivot['지출'],
+            name='지출', marker_color='#FF8B94'
+        ), secondary_y=False)
+
+        # 선: 총자산 누적 (증감 추이)
+        fig_year.add_trace(go.Scatter(
+            x=yearly_pivot['Year'], y=yearly_pivot['총자산_누적'],
+            name='총자산 누적 추이', mode='lines+markers',
+            line=dict(color='purple', width=3, dash='dot'),
+            marker=dict(size=8)
+        ), secondary_y=True)
+
+        # 레이아웃 설정
+        fig_year.update_layout(
+            title=f"연도별 수입/지출 및 총자산 추이 ({current_symbol})",
+            xaxis=dict(tickmode='linear', dtick=1, title='연도'),
+            barmode='group',
+            height=400,
+            hovermode="x unified",
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+        )
+        
+        # 축 제목 설정
+        fig_year.update_yaxes(title_text="수입/지출 금액", secondary_y=False)
+        fig_year.update_yaxes(title_text="총자산 누적액", secondary_y=True)
+
+        st.plotly_chart(fig_year, use_container_width=True)
+
+else:
+    st.info("데이터가 없습니다.")
 
 # -----------------------------------------------------------------------------
-# 7. [핵심 기능] 상세 내역 (월별 필터 + 삭제 기능)
+# 7. 상세 내역 관리
 # -----------------------------------------------------------------------------
 st.divider()
 st.subheader(f"📝 {selected_year}년 상세 내역 관리")
 
 if not df.empty:
-    # 1. 월별 필터 UI
     col_filter_1, col_filter_2 = st.columns([1, 4])
     with col_filter_1:
-        # [요구사항 2] 월 선택 (ALL + 1~12)
         month_options = ["ALL"] + [str(i) for i in range(1, 13)]
         selected_month_str = st.selectbox("월 선택", month_options)
     
-    # 2. 데이터 필터링 (연도 -> 월)
-    # 인덱스를 리셋하지 않아야 원본 df에서 정확히 삭제 가능!
     df_filtered = df[df['날짜'].dt.year == selected_year]
     
     if selected_month_str != "ALL":
@@ -286,17 +425,13 @@ if not df.empty:
                 st.info(f"조회된 {type_name} 내역이 없습니다.")
                 return
 
-            st.caption(f"{type_name} 내역: {len(subset_df)}건 | 삭제할 항목을 체크하고 버튼을 누르세요.")
-
-            # 삭제 체크박스 컬럼 추가
-            # 인덱스를 보존한 상태로 복사본 생성
+            st.caption(f"{type_name} 내역: {len(subset_df)}건")
             display_df = subset_df.copy()
             display_df.insert(0, "삭제", False)
 
-            # st.data_editor 사용
             edited_df = st.data_editor(
                 display_df,
-                key=f"editor_{selected_year}_{selected_month_str}_{type_name}", # 키를 유니크하게 유지
+                key=f"editor_{selected_year}_{selected_month_str}_{type_name}",
                 use_container_width=True,
                 hide_index=True,
                 column_config={
@@ -309,17 +444,11 @@ if not df.empty:
                 }
             )
 
-            # [요구사항 1] 삭제 버튼 및 로직
             if st.button(f"🗑️ 선택한 {type_name} 삭제하기", key=f"btn_del_{type_name}"):
-                # 체크된 행 가져오기
                 rows_to_delete = edited_df[edited_df["삭제"] == True]
-                
                 if not rows_to_delete.empty:
-                    # 원본 df에서 해당 인덱스 삭제
                     delete_indices = rows_to_delete.index
                     df.drop(delete_indices, inplace=True)
-                    
-                    # 시트에 저장
                     save_data(df, current_sheet)
                     st.rerun()
                 else:
