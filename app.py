@@ -6,53 +6,52 @@ import requests
 from streamlit_gsheets import GSheetsConnection
 
 # -----------------------------------------------------------------------------
-# 1. 페이지 설정 및 CSS (모바일 한 줄 강제 정렬)
+# 1. 페이지 설정 및 모바일 강제 정렬 CSS
 # -----------------------------------------------------------------------------
 st.set_page_config(layout="wide", page_title="Asset Management Program", page_icon="💰")
 
 st.markdown("""
 <style>
-    /* 1. 모바일에서 강제로 가로 배열 유지 (절대 세로로 안 쌓이게 함) */
-    div[data-testid="stHorizontalBlock"] {
-        flex-wrap: nowrap !important;
-        gap: 5px !important;
-        align-items: center !important;
-    }
-    
-    /* 2. 각 컬럼의 최소 너비를 0으로 해서 화면에 꽉 차게 찌그러뜨림 */
+    /* 1. 모바일 좌우 스크롤 및 줄바꿈 완벽 차단 */
     div[data-testid="column"] {
+        padding: 0px !important;
         min-width: 0px !important;
         flex: 1 1 auto !important;
-        padding: 0px !important;
+        overflow: hidden !important; /* 넘치는 텍스트 숨김 */
+    }
+    
+    div[data-testid="stHorizontalBlock"] {
+        gap: 2px !important; /* 컬럼 사이 간격 최소화 */
+        align-items: center !important;
     }
 
-    /* 3. 관리 버튼 스타일 (작고 심플하게) */
+    /* 2. 텍스트 크기 축소 및 한 줄 강제 (No Wrap) */
+    p, .stMarkdown {
+        font-size: 13px !important;
+        margin-bottom: 0px !important;
+        white-space: nowrap !important; /* 줄바꿈 절대 금지 */
+    }
+
+    /* 3. 버튼 크기 강제 축소 (아이콘만 딱 들어가게) */
     div[data-testid="column"] button {
         padding: 0px !important;
         min-height: 30px !important;
         height: 30px !important;
+        border: none !important;
+        background-color: transparent !important;
+    }
+    div[data-testid="column"] button:hover {
+        color: #ff4b4b !important;
         border: 1px solid #eee !important;
-        font-size: 12px !important;
     }
 
-    /* 4. 리스트 텍스트 스타일 */
-    .row-text {
-        font-size: 14px;
-        white-space: nowrap; /* 줄바꿈 방지 */
-        overflow: hidden;
-        text-overflow: ellipsis; /* 내용 길면 ... 처리 */
-        display: block;
-    }
-    
-    .amt-text {
-        font-size: 14px;
+    /* 4. 리스트 헤더 스타일 */
+    .list-header {
+        font-size: 12px;
+        color: #888;
         font-weight: bold;
-        text-align: right;
-        display: block;
+        text-align: center;
     }
-
-    /* 5. 헤더 숨기기 (리스트형 UI에는 헤더가 공간만 차지함) */
-    /* 필요하면 주석 해제하세요 */
 </style>
 """, unsafe_allow_html=True)
 
@@ -92,7 +91,7 @@ def save_data(df, sheet_name):
         df_save = df.copy()
         df_save['날짜'] = df_save['날짜'].dt.strftime('%Y-%m-%d')
         conn.update(worksheet=sheet_name, data=df_save)
-        st.toast("✅ 처리되었습니다.", icon="👌")
+        st.toast("✅ 처리 완료", icon="👌")
     except Exception as e:
         st.error(f"저장 실패: {e}")
 
@@ -156,7 +155,7 @@ if not df.empty and '카테고리' in df.columns:
 final_categories = sorted(list(set(DEFAULT_CATEGORIES + existing_cats + st.session_state['custom_categories'])))
 
 # -----------------------------------------------------------------------------
-# 4. 사이드바
+# 4. 사이드바 (카테고리 관리 - 콤보박스 방식 유지)
 # -----------------------------------------------------------------------------
 with st.sidebar:
     st.header("🗂️ 메뉴")
@@ -174,15 +173,11 @@ with st.sidebar:
         
         st.divider()
         st.subheader("카테고리 삭제")
-        
         cat_to_delete = st.selectbox("삭제할 카테고리 선택", options=["(선택안함)"] + final_categories)
-        
         if cat_to_delete != "(선택안함)":
-            st.warning(f"선택: {cat_to_delete}")
             if st.button(f"🗑️ '{cat_to_delete}' 삭제 실행", type="primary", use_container_width=True):
                 if cat_to_delete in st.session_state['custom_categories']:
                     st.session_state['custom_categories'].remove(cat_to_delete)
-                
                 if not df.empty and '카테고리' in df.columns:
                     if cat_to_delete in df['카테고리'].values:
                         df.loc[df['카테고리'] == cat_to_delete, '카테고리'] = '기타'
@@ -204,7 +199,6 @@ with st.sidebar:
             rate_twd_krw = st.number_input("🇹🇼 TWD → 🇰🇷", value=api_twd_krw, format="%.2f")
         
         st.divider()
-
         net_assets = {}
         for code, conf in CURRENCY_CONFIG.items():
             _df = load_data(conf['sheet_name'])
@@ -218,7 +212,6 @@ with st.sidebar:
         net_krw = net_assets['KRW']
         net_twd = net_assets['TWD']
         net_usd = net_assets['USD']
-
         total_asset_krw = net_krw + (net_usd * rate_usd_krw) + (net_twd * rate_twd_krw)
         total_asset_usd = total_asset_krw / rate_usd_krw if rate_usd_krw > 0 else 0
         total_asset_twd = total_asset_krw / rate_twd_krw if rate_twd_krw > 0 else 0
@@ -278,15 +271,17 @@ m2.metric("누적 수입", f"{current_symbol} {inc:,.0f}")
 m3.metric("누적 지출", f"{current_symbol} {exp:,.0f}")
 
 # -----------------------------------------------------------------------------
-# 7. 분석 및 차트
+# 7. 분석 및 차트 (인터랙션 완전 차단)
 # -----------------------------------------------------------------------------
 st.divider()
 selected_year = datetime.now().year 
 
+# [차트 설정] 모든 인터랙션(줌, 팬, 툴팁) 제거 -> 정적 이미지화
+STATIC_PLOT_CONFIG = {'staticPlot': True} 
+
 if not df.empty and '금액_숫자' in df.columns:
     years = sorted(df['날짜'].dt.year.unique(), reverse=True)
     if not years: years = [datetime.now().year]
-    
     selected_year = st.selectbox("📅 분석할 연도:", years)
     df_year = df[df['날짜'].dt.year == selected_year].copy()
     
@@ -309,7 +304,7 @@ if not df.empty and '금액_숫자' in df.columns:
                          color_discrete_map={'수입': '#A8E6CF', '지출': '#FF8B94'},
                          text_auto=',', title=f"{selected_year}년 월별 흐름")
             fig.update_layout(xaxis=dict(tickmode='linear', dtick=1, range=[0.5, 12.5]))
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, use_container_width=True, config=STATIC_PLOT_CONFIG)
 
         with tab2:
             exp_df = df_year[df_year['구분'] == '지출']
@@ -320,13 +315,13 @@ if not df.empty and '금액_숫자' in df.columns:
                     fig_pie = px.pie(cat_sum, values='금액_숫자', names='카테고리', 
                                      color_discrete_sequence=COLOR_SEQUENCE, title="카테고리 비중")
                     fig_pie.update_traces(textposition='inside', textinfo='percent+label')
-                    st.plotly_chart(fig_pie, use_container_width=True)
+                    st.plotly_chart(fig_pie, use_container_width=True, config=STATIC_PLOT_CONFIG)
                 with col_bar:
                     fig_bar = px.bar(cat_sum, x='금액_숫자', y='카테고리', orientation='h',
                                      color='카테고리', color_discrete_sequence=COLOR_SEQUENCE,
                                      text_auto=',', title="지출 순위")
                     fig_bar.update_layout(showlegend=False, yaxis=dict(categoryorder='total ascending'))
-                    st.plotly_chart(fig_bar, use_container_width=True)
+                    st.plotly_chart(fig_bar, use_container_width=True, config=STATIC_PLOT_CONFIG)
             else:
                 st.info("지출 데이터가 없습니다.")
         
@@ -339,12 +334,12 @@ if not df.empty and '금액_숫자' in df.columns:
                 color_discrete_map={'수입': '#A8E6CF', '지출': '#FF8B94'}
             )
             fig_year.update_layout(xaxis=dict(tickmode='linear', dtick=1))
-            st.plotly_chart(fig_year, use_container_width=True)
+            st.plotly_chart(fig_year, use_container_width=True, config=STATIC_PLOT_CONFIG)
 else:
     st.info("데이터가 없습니다.")
 
 # -----------------------------------------------------------------------------
-# 8. 상세 내역 (완벽한 모바일 리스트 뷰 + 팝업 관리)
+# 8. 상세 내역 (모바일 최적화: 한 줄 리스트 & 팝업 관리)
 # -----------------------------------------------------------------------------
 st.divider()
 st.subheader(f"📝 {selected_year}년 상세 내역")
@@ -352,45 +347,34 @@ st.subheader(f"📝 {selected_year}년 상세 내역")
 # [팝업] 통합 관리 다이얼로그 (수정 및 삭제)
 @st.dialog("내역 관리")
 def manage_dialog(row_data, idx, all_categories, current_sheet):
-    st.caption("내용을 수정하거나 삭제할 수 있습니다.")
+    st.caption("수정하거나 삭제할 수 있습니다.")
     
     # 수정 폼
-    with st.form("edit_form"):
-        new_date = st.date_input("날짜", value=row_data['날짜'])
-        
-        cat_idx = 0
-        if row_data['카테고리'] in all_categories:
-            cat_idx = all_categories.index(row_data['카테고리'])
-        new_cat = st.selectbox("카테고리", all_categories, index=cat_idx)
-        
-        new_amt = st.number_input("금액", value=int(row_data['금액']), step=1000)
-        new_memo = st.text_input("메모", value=row_data['메모'])
-        
-        c_save, c_del = st.columns([1, 1])
-        
-        # 수정 저장 버튼
-        if c_save.form_submit_button("💾 수정사항 저장", type="primary"):
-            df_curr = load_data(current_sheet)
-            real_idx = row_data['original_index']
-            
-            df_curr.at[real_idx, '날짜'] = pd.to_datetime(new_date)
-            df_curr.at[real_idx, '카테고리'] = new_cat
-            df_curr.at[real_idx, '금액'] = new_amt
-            df_curr.at[real_idx, '메모'] = new_memo
-            
-            save_data(df_curr, current_sheet)
-            st.rerun()
+    new_date = st.date_input("날짜", value=row_data['날짜'])
+    cat_idx = 0
+    if row_data['카테고리'] in all_categories:
+        cat_idx = all_categories.index(row_data['카테고리'])
+    new_cat = st.selectbox("카테고리", all_categories, index=cat_idx)
+    new_amt = st.number_input("금액", value=int(row_data['금액']), step=1000)
+    new_memo = st.text_input("메모", value=row_data['메모'])
+    
+    col_a, col_b = st.columns(2)
+    if col_a.button("💾 수정 저장", type="primary"):
+        df_curr = load_data(current_sheet)
+        real_idx = row_data['original_index']
+        df_curr.at[real_idx, '날짜'] = pd.to_datetime(new_date)
+        df_curr.at[real_idx, '카테고리'] = new_cat
+        df_curr.at[real_idx, '금액'] = new_amt
+        df_curr.at[real_idx, '메모'] = new_memo
+        save_data(df_curr, current_sheet)
+        st.rerun()
 
-    st.markdown("---")
-    # 삭제 버튼 (폼 밖으로 빼서 실수 방지)
-    st.write("이 내역을 영구적으로 삭제하시겠습니까?")
-    if st.button("🗑️ 삭제하기", type="primary"):
+    if col_b.button("🗑️ 삭제하기"):
         df_curr = load_data(current_sheet)
         real_idx = row_data['original_index']
         df_curr.drop(real_idx, inplace=True)
         save_data(df_curr, current_sheet)
         st.rerun()
-
 
 if not df.empty:
     df_filtered = df[df['날짜'].dt.year == selected_year].copy()
@@ -399,47 +383,48 @@ if not df.empty:
     if not df_filtered.empty:
         tab_inc, tab_exp = st.tabs(["🔵 수입 내역", "🔴 지출 내역"])
 
-        # 리스트 렌더링 함수
-        def render_mobile_list(subset_df):
+        # 리스트 렌더링 함수 (초경량 한 줄 모드)
+        def render_compact_list(subset_df):
             if subset_df.empty:
                 st.info("내역이 없습니다.")
                 return
 
-            # 헤더 (모바일에서도 보이게)
-            # 날짜(2.5) | 카테고리(2) | 금액(3) | 관리(1.5)
-            h1, h2, h3, h4 = st.columns([2.5, 2, 3, 1.5])
-            h1.markdown("**날짜**")
-            h2.markdown("**분류**")
-            h3.markdown("**금액**")
-            h4.markdown("**관리**")
+            # 헤더
+            # 비율: 날짜(2) | 분류(2.5) | 금액(2.5) | 관리(1)
+            h1, h2, h3, h4 = st.columns([2, 2.5, 2.5, 1])
+            h1.markdown("<div class='list-header'>날짜</div>", unsafe_allow_html=True)
+            h2.markdown("<div class='list-header'>분류</div>", unsafe_allow_html=True)
+            h3.markdown("<div class='list-header'>금액</div>", unsafe_allow_html=True)
+            h4.markdown("<div class='list-header'>관리</div>", unsafe_allow_html=True)
 
             for i, row in subset_df.iterrows():
+                # 스타일 적용 컨테이너
                 with st.container():
-                    # CSS Hack으로 가로 강제 정렬된 컬럼
-                    c1, c2, c3, c4 = st.columns([2.5, 2, 3, 1.5])
+                    c1, c2, c3, c4 = st.columns([2, 2.5, 2.5, 1])
                     
-                    # 날짜 (MM-DD 포맷으로 줄여서 공간 확보)
-                    c1.markdown(f"<span class='row-text'>{row['날짜'].strftime('%m-%d')}</span>", unsafe_allow_html=True)
+                    # 1. 날짜 (MM.DD 형태로 매우 짧게)
+                    c1.markdown(f"**{row['날짜'].strftime('%m.%d')}**")
                     
-                    # 카테고리
-                    c2.markdown(f"<span class='row-text'>{row['카테고리']}</span>", unsafe_allow_html=True)
+                    # 2. 카테고리 (텍스트)
+                    c2.markdown(f"{row['카테고리']}")
                     
-                    # 금액
-                    c3.markdown(f"<span class='amt-text'>{int(row['금액']):,}</span>", unsafe_allow_html=True)
+                    # 3. 금액 (천단위)
+                    c3.markdown(f"{int(row['금액']):,}")
                     
-                    # 관리 버튼 (하나로 통합)
-                    if c4.button("⚙️", key=f"m_{row['original_index']}"):
+                    # 4. 관리 버튼 (톱니바퀴) -> 팝업 호출
+                    if c4.button("⚙️", key=f"btn_{row['original_index']}"):
                         manage_dialog(row, row['original_index'], final_categories, current_sheet)
                     
-                    st.markdown("<hr style='margin: 2px 0; border-top: 1px solid #f0f0f0;'>", unsafe_allow_html=True)
+                    # 구분선 (아주 얇게)
+                    st.markdown("<hr style='margin: 0px 0px 5px 0px; border-top: 1px solid #f0f0f0;'>", unsafe_allow_html=True)
 
         with tab_inc:
             inc_data = df_filtered[df_filtered['구분'] == '수입'].sort_values('날짜', ascending=False)
-            render_mobile_list(inc_data)
+            render_compact_list(inc_data)
                 
         with tab_exp:
             exp_data = df_filtered[df_filtered['구분'] == '지출'].sort_values('날짜', ascending=False)
-            render_mobile_list(exp_data)
+            render_compact_list(exp_data)
             
     else:
         st.info("해당 연도의 내역이 없습니다.")
