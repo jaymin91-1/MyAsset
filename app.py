@@ -6,57 +6,23 @@ import requests
 from streamlit_gsheets import GSheetsConnection
 
 # -----------------------------------------------------------------------------
-# [핵심] GUI 최적화 CSS (여백 제거, 컴팩트 스타일)
+# 1. 페이지 설정 및 CSS (복잡한 레이아웃 제거, 기본 스타일 유지)
 # -----------------------------------------------------------------------------
 st.set_page_config(layout="wide", page_title="Asset Management Program", page_icon="💰")
 
+# 깔끔한 테이블 스타일을 위한 최소한의 CSS
 st.markdown("""
 <style>
-    /* 1. 컬럼 사이 간격 거의 제거 (좌우 이동 방지) */
-    div[data-testid="stHorizontalBlock"] {
-        gap: 0.1rem !important; /* 간격을 0.1로 최소화 */
-    }
-    
-    /* 2. 각 컬럼의 불필요한 최소 너비 제거 (화면에 꽉 차게) */
-    div[data-testid="column"] {
-        min-width: 0px !important;
-        flex: 1 1 auto !important;
-    }
-
-    /* 3. 입력창/버튼 내부 여백 축소 (더 작고 날씬하게) */
-    .stDateInput input, .stSelectbox div[data-baseweb="select"], .stTextInput input {
-        padding: 0px 5px !important; /* 내부 여백 축소 */
-        min-height: 35px !important;
-        font-size: 14px !important;
-    }
-    
-    /* 4. 삭제 버튼 스타일 (작고 심플하게) */
-    button[kind="secondary"] {
-        padding: 0px 0px !important;
-        min-height: 35px !important;
-        width: 100% !important;
-        border: 1px solid #ffcccc !important;
+    /* 삭제 버튼(체크박스) 강조 */
+    div[data-testid="stCheckbox"] label {
         color: red !important;
-        font-weight: bold !important;
-    }
-
-    /* 5. 사이드바 버튼 정렬 수정 */
-    .sidebar-row {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        padding: 5px 0;
-    }
-    
-    /* 6. 모바일에서 텍스트 줄바꿈 허용 (칸이 좁을 때 대비) */
-    p {
-        word-break: break-all;
+        font-weight: bold;
     }
 </style>
 """, unsafe_allow_html=True)
 
 # -----------------------------------------------------------------------------
-# 1. 설정 및 국가/통화 정의
+# 2. 설정 및 유틸리티 함수
 # -----------------------------------------------------------------------------
 CURRENCY_CONFIG = {
     "KRW": {"name": "🇰🇷 대한민국 (KRW)", "symbol": "₩", "sheet_name": "KRW"},
@@ -67,9 +33,6 @@ CURRENCY_CONFIG = {
 DEFAULT_CATEGORIES = ['식비', '교통비', '쇼핑', '통신비', '주거비', '의료비', '월급', '보너스', '배당금', '기타']
 COLOR_SEQUENCE = px.colors.qualitative.Pastel
 
-# -----------------------------------------------------------------------------
-# 2. 유틸리티 함수
-# -----------------------------------------------------------------------------
 conn = st.connection("gsheets", type=GSheetsConnection)
 
 def load_data(sheet_name):
@@ -94,6 +57,7 @@ def save_data(df, sheet_name):
         df_save = df.copy()
         df_save['날짜'] = df_save['날짜'].dt.strftime('%Y-%m-%d')
         conn.update(worksheet=sheet_name, data=df_save)
+        st.toast("✅ 데이터가 저장되었습니다!", icon="💾")
     except Exception as e:
         st.error(f"저장 실패: {e}")
 
@@ -157,40 +121,44 @@ if not df.empty and '카테고리' in df.columns:
 final_categories = sorted(list(set(DEFAULT_CATEGORIES + existing_cats + st.session_state['custom_categories'])))
 
 # -----------------------------------------------------------------------------
-# 4. 사이드바 (설정/자산) - [수정] 간격 좁히기
+# 4. 사이드바 (카테고리 관리 GUI 개선)
 # -----------------------------------------------------------------------------
 with st.sidebar:
     st.header("🗂️ 메뉴")
     tab_settings, tab_assets = st.tabs(["⚙️ 설정", "💱 자산 현황"])
     
+    # [요구사항 1] 카테고리 관리: 선택 -> 삭제 방식
     with tab_settings:
-        st.subheader("카테고리 관리")
-        new_cat_input = st.text_input("새 카테고리 추가")
-        if st.button("추가", use_container_width=True):
+        st.subheader("카테고리 추가")
+        new_cat_input = st.text_input("새 카테고리 입력", placeholder="예: 운동")
+        if st.button("추가하기", use_container_width=True):
             if new_cat_input and new_cat_input not in final_categories:
                 st.session_state['custom_categories'].append(new_cat_input)
                 st.rerun()
             elif new_cat_input in final_categories:
-                st.warning("중복된 카테고리입니다.")
+                st.warning("이미 있는 카테고리입니다.")
         
         st.divider()
-        st.caption("목록")
+        st.subheader("카테고리 삭제")
         
-        for cat in final_categories:
-            # [수정] 비율을 [3, 1] 정도로 좁혀서 텍스트와 버튼을 가깝게 배치
-            # 빈 공간(Space)을 아예 없앰
-            c_text, c_btn = st.columns([3, 1]) 
-            with c_text:
-                st.markdown(f"<div style='margin-top: 5px; font-size:14px;'>{cat}</div>", unsafe_allow_html=True)
-            with c_btn:
-                if st.button("X", key=f"del_cat_{cat}"):
-                    if cat in st.session_state['custom_categories']:
-                        st.session_state['custom_categories'].remove(cat)
-                    if not df.empty and '카테고리' in df.columns:
-                        if cat in df['카테고리'].values:
-                            df.loc[df['카테고리'] == cat, '카테고리'] = '기타'
-                            save_data(df, current_sheet)
-                    st.rerun()
+        # 삭제할 대상을 콤보박스로 선택 (리스트 UI 대체)
+        cat_to_delete = st.selectbox("삭제할 카테고리 선택", options=["(선택안함)"] + final_categories)
+        
+        if cat_to_delete != "(선택안함)":
+            st.warning(f"선택: {cat_to_delete}")
+            # 삭제 확인 버튼
+            if st.button(f"🗑️ '{cat_to_delete}' 삭제 실행", type="primary", use_container_width=True):
+                # 1. 커스텀 리스트에서 제거
+                if cat_to_delete in st.session_state['custom_categories']:
+                    st.session_state['custom_categories'].remove(cat_to_delete)
+                
+                # 2. 데이터프레임 매핑 변경 (삭제된건 기타로)
+                if not df.empty and '카테고리' in df.columns:
+                    if cat_to_delete in df['카테고리'].values:
+                        df.loc[df['카테고리'] == cat_to_delete, '카테고리'] = '기타'
+                        save_data(df, current_sheet)
+                
+                st.rerun()
 
     with tab_assets:
         st.subheader("환율 설정 (기준: KRW)")
@@ -236,7 +204,6 @@ with st.sidebar:
 # -----------------------------------------------------------------------------
 st.subheader(f"➕ {current_config['name']} 내역 추가")
 with st.expander("입력창 열기", expanded=True):
-    # [수정] 입력창도 좀 더 촘촘하게 배치
     c1, c2, c3 = st.columns([1, 1, 1.5])
     with c1: new_date = st.date_input("날짜", datetime.now())
     with c2: new_type = st.selectbox("구분", ["지출", "수입"])
@@ -244,7 +211,7 @@ with st.expander("입력창 열기", expanded=True):
 
     c4, c5, c6 = st.columns([1.5, 2, 1])
     with c4: new_amount_str = st.text_input(f"금액 ({current_symbol})", value="0")
-    with c5: new_memo = st.text_input("메모", placeholder="내용")
+    with c5: new_memo = st.text_input("메모", placeholder="내용 입력")
     with c6:
         st.write("")
         st.write("")
@@ -300,7 +267,6 @@ if not df.empty and '금액_숫자' in df.columns:
         with tab1:
             df_year['Month'] = df_year['날짜'].dt.month
             all_months = pd.DataFrame({'Month': range(1, 13)})
-            
             m_sum = df_year.groupby(['Month', '구분'])['금액_숫자'].sum().reset_index()
             m_pivot = m_sum.pivot(index='Month', columns='구분', values='금액_숫자').reset_index()
             final_m = pd.merge(all_months, m_pivot, on='Month', how='left').fillna(0)
@@ -320,7 +286,6 @@ if not df.empty and '금액_숫자' in df.columns:
             exp_df = df_year[df_year['구분'] == '지출']
             if not exp_df.empty:
                 cat_sum = exp_df.groupby('카테고리')['금액_숫자'].sum().reset_index().sort_values('금액_숫자', ascending=True)
-                
                 col_pie, col_bar = st.columns(2)
                 with col_pie:
                     fig_pie = px.pie(cat_sum, values='금액_숫자', names='카테고리', 
@@ -350,78 +315,74 @@ else:
     st.info("데이터가 없습니다.")
 
 # -----------------------------------------------------------------------------
-# 8. 상세 내역 (수정/삭제 가능 - Compact Mode)
+# 8. 상세 내역 (Table Editor 방식 도입 - GUI 파괴 방지)
 # -----------------------------------------------------------------------------
 st.divider()
 st.subheader(f"📝 {selected_year}년 상세 내역")
 
 if not df.empty:
     df_filtered = df[df['날짜'].dt.year == selected_year].copy()
-    df_filtered['original_index'] = df_filtered.index 
-
+    
     if not df_filtered.empty:
-        tab_inc, tab_exp = st.tabs(["🔵 수입", "🔴 지출"])
+        # [요구사항 2] 수입/지출 탭 분리
+        tab_inc, tab_exp = st.tabs(["🔵 수입 내역", "🔴 지출 내역"])
 
-        def render_rows(subset_df, type_name):
+        def render_editor(subset_df, type_name):
             if subset_df.empty:
-                st.caption(f"{type_name} 내역이 없습니다.")
+                st.info(f"{type_name} 내역이 없습니다.")
                 return
 
-            # 헤더도 비율을 맞춰서 생성 (글자 크기 축소)
-            # 날짜(2) | 카테고리(2) | 금액(2) | 메모(3) | 삭제(0.8)
-            h1, h2, h3, h4, h5 = st.columns([2, 2, 2, 3, 0.8])
-            h1.markdown("<small><b>날짜</b></small>", unsafe_allow_html=True)
-            h2.markdown("<small><b>분류</b></small>", unsafe_allow_html=True)
-            h3.markdown("<small><b>금액</b></small>", unsafe_allow_html=True)
-            h4.markdown("<small><b>메모</b></small>", unsafe_allow_html=True)
-            h5.markdown("<small><b>삭제</b></small>", unsafe_allow_html=True)
+            st.caption("💡 표 안의 내용을 더블 클릭하여 직접 수정할 수 있습니다. 삭제하려면 우측 '삭제' 체크박스를 선택 후 [변경사항 저장]을 누르세요.")
+            
+            # 삭제를 위한 체크박스 컬럼 추가
+            subset_df = subset_df.copy()
+            subset_df['삭제'] = False
+            
+            # [핵심] st.data_editor 사용 (GUI 깨짐 방지 및 엑셀형 UI)
+            edited_df = st.data_editor(
+                subset_df,
+                key=f"editor_{selected_year}_{type_name}",
+                use_container_width=True,
+                hide_index=True,
+                num_rows="dynamic", # 행 추가 허용
+                column_config={
+                    "날짜": st.column_config.DateColumn("날짜", format="YYYY-MM-DD", required=True),
+                    "카테고리": st.column_config.SelectboxColumn("카테고리", options=final_categories, required=True),
+                    "금액": st.column_config.NumberColumn("금액", format="%d", min_value=0, required=True),
+                    "메모": st.column_config.TextColumn("메모"),
+                    "구분": st.column_config.TextColumn("구분", disabled=True), # 구분은 수정 불가
+                    "삭제": st.column_config.CheckboxColumn("삭제", help="체크하면 저장 시 삭제됩니다.")
+                },
+                # 컬럼 순서 지정 (삭제를 맨 뒤로)
+                column_order=["날짜", "카테고리", "금액", "메모", "삭제"]
+            )
 
-            for i, row in subset_df.iterrows():
-                with st.container():
-                    # [핵심] 빡빡한 비율 설정: 화면 너비에 꽉 차게 5개를 배치
-                    c1, c2, c3, c4, c5 = st.columns([2, 2, 2, 3, 0.8])
-                    
-                    idx = row['original_index']
-                    k_date = f"d_{idx}"
-                    k_cat = f"c_{idx}"
-                    k_amt = f"a_{idx}"
-                    k_memo = f"m_{idx}"
-                    k_del = f"x_{idx}"
-
-                    new_date = c1.date_input("", value=row['날짜'], key=k_date, label_visibility="collapsed")
-                    cat_idx = final_categories.index(row['카테고리']) if row['카테고리'] in final_categories else 0
-                    new_cat = c2.selectbox("", final_categories, index=cat_idx, key=k_cat, label_visibility="collapsed")
-                    new_amt_val = c3.text_input("", value=str(int(row['금액'])), key=k_amt, label_visibility="collapsed")
-                    new_memo = c4.text_input("", value=row['메모'], key=k_memo, label_visibility="collapsed")
-
-                    # 삭제 버튼 (버튼 텍스트를 'X'로 줄여서 공간 확보)
-                    if c5.button("X", key=k_del, type="secondary"):
-                        df.drop(idx, inplace=True)
-                        save_data(df, current_sheet)
-                        st.rerun()
-
-                    current_amt = parse_currency(new_amt_val)
-                    if (pd.to_datetime(new_date) != row['날짜'] or 
-                        new_cat != row['카테고리'] or 
-                        current_amt != int(row['금액']) or 
-                        new_memo != row['메모']):
-                        
-                        df.at[idx, '날짜'] = pd.to_datetime(new_date)
-                        df.at[idx, '카테고리'] = new_cat
-                        df.at[idx, '금액'] = current_amt
-                        df.at[idx, '메모'] = new_memo
-                        save_data(df, current_sheet)
-                        st.rerun()
+            if st.button(f"💾 {type_name} 변경사항 저장", key=f"save_{type_name}"):
+                # 1. '삭제'가 체크되지 않은 행만 남김
+                to_keep = edited_df[edited_df['삭제'] == False].drop(columns=['삭제'])
+                
+                # 2. 원본 데이터프레임에서 현재 보고 있는 부분(연도/타입)을 제거하고
+                other_data = df[~((df['날짜'].dt.year == selected_year) & (df['구분'] == type_name))]
+                
+                # 3. 수정된 데이터를 합침
+                to_keep['날짜'] = pd.to_datetime(to_keep['날짜'])
+                to_keep['구분'] = type_name # 혹시 모를 결측 방지
+                
+                final_df = pd.concat([other_data, to_keep], ignore_index=True)
+                
+                # 저장
+                save_data(final_df, current_sheet)
+                st.rerun()
 
         with tab_inc:
             inc_data = df_filtered[df_filtered['구분'] == '수입'].sort_values('날짜', ascending=False)
-            render_rows(inc_data, "수입")
+            render_editor(inc_data, "수입")
                 
         with tab_exp:
             exp_data = df_filtered[df_filtered['구분'] == '지출'].sort_values('날짜', ascending=False)
-            render_rows(exp_data, "지출")
+            render_editor(exp_data, "지출")
             
     else:
-        st.caption("내역 없음")
+        st.info("해당 연도의 내역이 없습니다.")
 else:
-    st.caption("데이터 없음")
+    st.info("데이터가 없습니다.")
