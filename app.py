@@ -3,7 +3,6 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 from datetime import datetime
-import json
 import requests
 from streamlit_gsheets import GSheetsConnection
 
@@ -12,7 +11,7 @@ from streamlit_gsheets import GSheetsConnection
 # -----------------------------------------------------------------------------
 st.set_page_config(layout="wide", page_title="Asset Management Program", page_icon="💰")
 
-# [수정] 파일명 대신 구글시트의 '워크시트(탭) 이름'을 매핑합니다.
+# 구글시트 워크시트(탭) 이름 매핑
 CURRENCY_CONFIG = {
     "KRW": {"name": "🇰🇷 대한민국 (KRW)", "symbol": "₩", "sheet_name": "KRW"},
     "TWD": {"name": "🇹🇼 대만 (TWD)", "symbol": "NT$", "sheet_name": "TWD"},
@@ -30,6 +29,7 @@ conn = st.connection("gsheets", type=GSheetsConnection)
 
 def load_data(sheet_name):
     try:
+        # ttl=0으로 항상 최신 데이터 로드
         df = conn.read(worksheet=sheet_name, ttl=0)
         if df.empty:
             return pd.DataFrame(columns=['날짜', '구분', '카테고리', '금액', '메모'])
@@ -83,6 +83,10 @@ st.title("💰 클라우드 자산관리")
 if 'current_currency_code' not in st.session_state:
     st.session_state['current_currency_code'] = "KRW"
 
+# 사이드바에 저장된 임시 카테고리 관리를 위한 세션 초기화
+if 'custom_categories' not in st.session_state:
+    st.session_state['custom_categories'] = []
+
 selected_code_key = st.radio(
     "국가 선택:",
     options=list(CURRENCY_CONFIG.keys()),
@@ -101,7 +105,14 @@ current_symbol = current_config['symbol']
 current_sheet = current_config['sheet_name']
 
 df = load_data(current_sheet)
-categories = DEFAULT_CATEGORIES
+
+# [개선 1] 카테고리 로직 강화: 기본 + 데이터에 있는 것 + 세션에 추가된 것
+existing_cats = []
+if not df.empty and '카테고리' in df.columns:
+    existing_cats = df['카테고리'].unique().tolist()
+
+# 중복 제거 및 정렬
+final_categories = sorted(list(set(DEFAULT_CATEGORIES + existing_cats + st.session_state['custom_categories'])))
 
 # -----------------------------------------------------------------------------
 # 4. 사이드바 (설정/자산)
@@ -110,9 +121,18 @@ with st.sidebar:
     st.header("🗂️ 메뉴")
     tab_settings, tab_assets = st.tabs(["⚙️ 설정", "💱 자산 현황"])
     
+    # [요구사항 1] 카테고리 추가 기능 복구
     with tab_settings:
-        st.info("카테고리는 현재 고정값입니다.")
-        st.write(f"`{', '.join(categories)}`")
+        st.subheader("카테고리 관리")
+        st.write(f"현재 목록: `{', '.join(final_categories)}`")
+        
+        new_cat_input = st.text_input("새 카테고리 입력")
+        if st.button("추가"):
+            if new_cat_input and new_cat_input not in final_categories:
+                st.session_state['custom_categories'].append(new_cat_input)
+                st.rerun()
+            elif new_cat_input in final_categories:
+                st.warning("이미 존재하는 카테고리입니다.")
 
     with tab_assets:
         st.subheader("환율 설정 (기준: USD)")
@@ -158,7 +178,7 @@ with st.expander("입력창 열기", expanded=True):
     c1, c2, c3 = st.columns([1, 1, 1.5])
     with c1: new_date = st.date_input("날짜", datetime.now())
     with c2: new_type = st.selectbox("구분", ["지출", "수입"])
-    with c3: new_category = st.selectbox("카테고리", categories)
+    with c3: new_category = st.selectbox("카테고리", final_categories) # 업데이트된 카테고리 목록 사용
 
     c4, c5, c6 = st.columns([1.5, 2, 1])
     with c4: new_amount_str = st.text_input(f"금액 ({current_symbol})", value="0")
@@ -204,7 +224,6 @@ m3.metric("누적 지출", f"{current_symbol} {exp:,.0f}")
 # -----------------------------------------------------------------------------
 st.divider()
 
-# [수정: 에러 해결 핵심] 연도 변수를 미리 초기화합니다.
 selected_year = datetime.now().year 
 
 if not df.empty and '금액_숫자' in df.columns:
@@ -215,7 +234,8 @@ if not df.empty and '금액_숫자' in df.columns:
     df_year = df[df['날짜'].dt.year == selected_year].copy()
     
     if not df_year.empty:
-        tab1, tab2 = st.tabs(["📊 월별 흐름", "🍩 지출 분석"])
+        # [요구사항 2] 연간 흐름 탭 복구
+        tab1, tab2, tab3 = st.tabs(["📊 월별 흐름", "🍩 지출 분석", "📈 연도별 흐름"])
         
         with tab1:
             df_year['Month'] = df_year['날짜'].dt.month
@@ -230,12 +250,37 @@ if not df.empty and '금액_숫자' in df.columns:
         with tab2:
             exp_df = df_year[df_year['구분'] == '지출']
             if not exp_df.empty:
-                cat_sum = exp_df.groupby('카테고리')['금액_숫자'].sum().reset_index()
-                fig_pie = px.pie(cat_sum, values='금액_숫자', names='카테고리', 
-                                 color_discrete_sequence=COLOR_SEQUENCE, title="카테고리별 지출 비중")
-                st.plotly_chart(fig_pie, use_container_width=True)
+                cat_sum = exp_df.groupby('카테고리')['금액_숫자'].sum().reset_index().sort_values('금액_숫자', ascending=True)
+                
+                # [요구사항 3] 막대 그래프 복구 (원형 차트 옆에 배치)
+                col_pie, col_bar = st.columns(2)
+                
+                with col_pie:
+                    fig_pie = px.pie(cat_sum, values='금액_숫자', names='카테고리', 
+                                     color_discrete_sequence=COLOR_SEQUENCE, title="카테고리 비중")
+                    fig_pie.update_traces(textposition='inside', textinfo='percent+label')
+                    st.plotly_chart(fig_pie, use_container_width=True)
+                
+                with col_bar:
+                    fig_bar = px.bar(cat_sum, x='금액_숫자', y='카테고리', orientation='h',
+                                     color='카테고리', color_discrete_sequence=COLOR_SEQUENCE,
+                                     text_auto=',', title="지출 순위")
+                    fig_bar.update_layout(showlegend=False, yaxis=dict(categoryorder='total ascending'))
+                    st.plotly_chart(fig_bar, use_container_width=True)
             else:
                 st.info("지출 데이터가 없습니다.")
+        
+        with tab3:
+            # [요구사항 2 구현] 연도별 전체 흐름
+            df['Year'] = df['날짜'].dt.year
+            y_sum = df.groupby(['Year', '구분'])['금액_숫자'].sum().reset_index()
+            fig_year = px.bar(
+                y_sum, x='Year', y='금액_숫자', color='구분', barmode='group',
+                text_auto=',', title=f"연도별 전체 흐름 ({current_symbol})",
+                color_discrete_map={'수입': '#A8E6CF', '지출': '#FF8B94'}
+            )
+            fig_year.update_layout(xaxis=dict(tickmode='linear', dtick=1))
+            st.plotly_chart(fig_year, use_container_width=True)
 else:
     st.info("데이터가 없습니다. 위 입력창을 통해 자산을 추가해보세요!")
 
@@ -243,18 +288,36 @@ else:
 # 8. 상세 내역
 # -----------------------------------------------------------------------------
 st.divider()
-
-# [안전 장치 추가] selected_year가 정의된 상태에서만 사용
 st.subheader(f"📝 {selected_year}년 상세 내역 (최신순)")
 
 if not df.empty:
     display_df = df[df['날짜'].dt.year == selected_year].sort_values('날짜', ascending=False)
+    
     if not display_df.empty:
-        st.dataframe(
-            display_df[['날짜', '구분', '카테고리', '금액', '메모']],
-            use_container_width=True,
-            hide_index=True
-        )
+        # [요구사항 4] 상세 내역을 수입/지출 탭으로 분리
+        tab_inc, tab_exp = st.tabs(["🔵 수입 내역", "🔴 지출 내역"])
+        
+        with tab_inc:
+            inc_df = display_df[display_df['구분'] == '수입']
+            if not inc_df.empty:
+                st.dataframe(
+                    inc_df[['날짜', '카테고리', '금액', '메모']],
+                    use_container_width=True,
+                    hide_index=True
+                )
+            else:
+                st.caption("수입 내역이 없습니다.")
+                
+        with tab_exp:
+            exp_df = display_df[display_df['구분'] == '지출']
+            if not exp_df.empty:
+                st.dataframe(
+                    exp_df[['날짜', '카테고리', '금액', '메모']],
+                    use_container_width=True,
+                    hide_index=True
+                )
+            else:
+                st.caption("지출 내역이 없습니다.")
     else:
         st.caption("해당 연도의 내역이 없습니다.")
 else:
