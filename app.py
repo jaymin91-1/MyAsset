@@ -76,7 +76,6 @@ def save_data(df, sheet_name):
         df_save = df.copy()
         df_save['날짜'] = df_save['날짜'].dt.strftime('%Y-%m-%d')
         conn.update(worksheet=sheet_name, data=df_save)
-        # 여기서 toast를 띄우지 않고, 버튼 클릭 로직에서 띄웁니다 (초기화 타이밍 때문)
     except Exception as e:
         st.error(f"저장 실패: {e}")
 
@@ -107,7 +106,6 @@ def get_exchange_rates_krw_base():
 # 3. 초기화 및 데이터 로드
 # -----------------------------------------------------------------------------
 st.title("📒 가계부")
-# [요구사항 2] 점 제거
 st.markdown("<div class='developer-credit'>2026.01.01 Developed by Jay</div>", unsafe_allow_html=True)
 
 if 'current_currency_code' not in st.session_state:
@@ -117,7 +115,7 @@ if 'custom_categories' not in st.session_state:
 if 'rates' not in st.session_state:
     st.session_state['rates'] = get_exchange_rates_krw_base()
 
-# [요구사항 4] 입력 폼 초기화를 위한 Session State 초기값 설정
+# 입력 폼 초기화를 위한 Session State
 if 'input_amount' not in st.session_state: st.session_state['input_amount'] = "0"
 if 'input_memo' not in st.session_state: st.session_state['input_memo'] = ""
 
@@ -199,10 +197,12 @@ with st.sidebar:
         net_usd = net_assets['USD']
         
         st.subheader("🏦 통화별 보유 잔액")
-        # [요구사항 1] 순서 변경: KRW -> TWD -> USD
-        st.write(f"🇰🇷 KRW: **{net_krw:,.0f}** 원")
-        st.write(f"🇹🇼 TWD: **{net_twd:,.0f}** NT$")
-        st.write(f"🇺🇸 USD: **{net_usd:,.2f}** $")
+        
+        # [요구사항 1] 글자 크기 줄이기 (HTML/CSS 사용)
+        # font-size를 조절하여 말줄임표(...) 현상을 방지
+        st.markdown(f"<span style='font-size:16px;'>🇰🇷 KRW: <b>{net_krw:,.0f}</b> 원</span>", unsafe_allow_html=True)
+        st.markdown(f"<span style='font-size:16px;'>🇹🇼 TWD: <b>{net_twd:,.0f}</b> NT$</span>", unsafe_allow_html=True)
+        st.markdown(f"<span style='font-size:16px;'>🇺🇸 USD: <b>{net_usd:,.2f}</b> $</span>", unsafe_allow_html=True)
         
         st.divider()
 
@@ -229,7 +229,6 @@ with st.expander("입력창 열기", expanded=True):
 
     c4, c5, c6 = st.columns([1.5, 2, 1])
     with c4: 
-        # [요구사항 4] key를 지정하여 session_state로 제어 가능하게 함
         new_amount_str = st.text_input(f"금액 ({current_symbol})", key="input_amount")
     with c5: 
         new_memo = st.text_input("메모", placeholder="내용 입력", key="input_memo")
@@ -249,10 +248,9 @@ with st.expander("입력창 열기", expanded=True):
                 updated_df = pd.concat([df, new_row], ignore_index=True)
                 save_data(updated_df, current_sheet)
                 
-                # [요구사항 3] 팝업 메시지
                 st.toast("✅ 정상적으로 저장되었습니다!", icon="💾")
                 
-                # [요구사항 4] 입력 필드 초기화
+                # 입력 필드 초기화
                 st.session_state['input_amount'] = "0"
                 st.session_state['input_memo'] = ""
                 
@@ -374,13 +372,30 @@ if not df.empty:
         month_options = ["ALL"] + [str(i) for i in range(1, 13)]
         selected_month_str = st.selectbox("월 선택", month_options)
     
+    # 1. 연도 필터
     df_filtered = df[df['날짜'].dt.year == selected_year]
     
+    # 2. 월 필터
     if selected_month_str != "ALL":
         target_month = int(selected_month_str)
         df_filtered = df_filtered[df_filtered['날짜'].dt.month == target_month]
 
     if not df_filtered.empty:
+        # [요구사항 2] 요약 정보 표시 (총 수입, 총 지출, 도합)
+        # 선택된 데이터(df_filtered)를 기준으로 계산
+        summary_inc = df_filtered[df_filtered['구분'] == '수입']['금액'].apply(parse_currency).sum()
+        summary_exp = df_filtered[df_filtered['구분'] == '지출']['금액'].apply(parse_currency).sum()
+        summary_total = summary_inc - summary_exp
+        
+        # 3단 컬럼으로 표시
+        sm1, sm2, sm3 = st.columns(3)
+        sm1.metric("➕ 총 수입", f"{summary_inc:,.0f}")
+        sm2.metric("➖ 총 지출", f"{summary_exp:,.0f}")
+        sm3.metric("💰 도합", f"{summary_total:,.0f}", delta=f"{summary_total:,.0f}")
+        
+        st.divider()
+
+        # 3. 탭 구성
         tab_inc, tab_exp = st.tabs(["🔵 수입 내역", "🔴 지출 내역"])
 
         def render_delete_table(subset_df, type_name):
