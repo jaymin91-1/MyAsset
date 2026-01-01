@@ -55,11 +55,10 @@ PLOT_CONFIG = {
 
 conn = st.connection("gsheets", type=GSheetsConnection)
 
-# [수정됨] ttl=0을 추가하여 연결 자체의 캐싱 방지
+# [최적화] 데이터 로드 캐싱 (10분)
 @st.cache_data(ttl=600)
 def load_data(sheet_name):
     try:
-        # ttl=0을 넣어줘야 load_data.clear() 호출 시 진짜 최신 데이터를 가져옵니다.
         df = conn.read(worksheet=sheet_name, ttl=0)
         if df.empty:
             return pd.DataFrame(columns=['날짜', '구분', '카테고리', '금액', '메모'])
@@ -75,13 +74,13 @@ def load_data(sheet_name):
     except Exception as e:
         return pd.DataFrame(columns=['날짜', '구분', '카테고리', '금액', '메모'])
 
-# 데이터 저장 및 캐시 초기화
+# [최적화] 데이터 저장 및 캐시 초기화
 def save_data(df, sheet_name):
     try:
         df_save = df.copy()
         df_save['날짜'] = df_save['날짜'].dt.strftime('%Y-%m-%d')
         conn.update(worksheet=sheet_name, data=df_save)
-        # 저장 후 캐시를 비웁니다.
+        # 저장 후 캐시 비우기
         load_data.clear()
     except Exception as e:
         st.error(f"저장 실패: {e}")
@@ -94,7 +93,7 @@ def parse_currency(value_str):
         return int(float(cleaned))
     except: return 0
 
-# 환율 정보 캐싱 (1시간)
+# [최적화] 환율 정보 캐싱 (1시간)
 @st.cache_data(ttl=3600)
 def get_exchange_rates_krw_base():
     try:
@@ -115,10 +114,10 @@ def get_exchange_rates_krw_base():
 # 3. 초기화 및 데이터 로드
 # -----------------------------------------------------------------------------
 st.title("📒 가계부")
-# Version 및 개발자 정보
+# [요구사항 3] Version 1.1로 수정
 st.markdown("""
 <div class='developer-credit'>
-    Version 1.0<br>
+    Version 1.1<br>
     2026.01.01 Developed by Jay
 </div>
 """, unsafe_allow_html=True)
@@ -149,9 +148,9 @@ current_config = CURRENCY_CONFIG[st.session_state['current_currency_code']]
 current_symbol = current_config['symbol']
 current_sheet = current_config['sheet_name']
 
-# 데이터 로드
+# 데이터 로드 (캐시 사용)
 df = load_data(current_sheet)
-# 환율 정보 로드
+# 환율 정보 로드 (캐시 사용)
 api_usd_krw, api_twd_krw = get_exchange_rates_krw_base()
 
 existing_cats = []
@@ -164,6 +163,7 @@ final_categories = sorted(list(set(DEFAULT_CATEGORIES + existing_cats + st.sessi
 # -----------------------------------------------------------------------------
 with st.sidebar:
     st.header("🗂️ 메뉴")
+    # 탭 순서: 자산 현황 -> 설정
     tab_assets, tab_settings = st.tabs(["💱 자산 현황", "⚙️ 설정"])
     
     with tab_assets:
@@ -287,7 +287,7 @@ with st.expander("입력창 열기", expanded=True):
         )
 
 # -----------------------------------------------------------------------------
-# 6. 차트 및 분석
+# 6. 차트 및 분석 (메인)
 # -----------------------------------------------------------------------------
 st.divider()
 
@@ -417,11 +417,51 @@ if not df.empty:
         sm1, sm2, sm3 = st.columns(3)
         sm1.metric("➕ 총 수입", f"{current_symbol} {summary_inc:,.0f}")
         sm2.metric("➖ 총 지출", f"{current_symbol} {summary_exp:,.0f}")
-        sm3.metric("💰 도합", f"{current_symbol} {summary_total:,.0f}", delta=f"{current_symbol} {summary_total:,.0f}")
+        
+        # [요구사항 2] 도합 색상 처리 (양수: 초록, 음수: 빨강)
+        # delta에 부호가 포함된 문자열을 전달하면 Streamlit이 자동으로 색상을 매핑합니다.
+        # 명확한 인식을 위해 부호(+/-)를 통화기호보다 앞에 배치합니다.
+        delta_str = f"{summary_total:,.0f} {current_symbol}"
+        sm3.metric("💰 도합", f"{current_symbol} {summary_total:,.0f}", delta=delta_str)
+        
+        st.divider()
+        
+        # [요구사항 1] 선택된 기간(월/ALL)에 대한 지출 분석 차트 추가
+        # 지출 데이터만 필터링
+        detail_exp_df = df_filtered[df_filtered['구분'] == '지출']
+        
+        if not detail_exp_df.empty:
+            st.markdown("##### 📊 기간별 지출 분석")
+            # 데이터 집계
+            detail_cat_sum = detail_exp_df.groupby('카테고리')['금액_숫자'].sum().reset_index()
+            detail_cat_sum = detail_cat_sum.sort_values('금액_숫자', ascending=False)
+            
+            dc1, dc2 = st.columns(2)
+            
+            with dc1:
+                # 파이 차트 
+                chart_title = f"{selected_month_str}월 지출 비중" if selected_month_str != "ALL" else f"{selected_year}년 전체 지출 비중"
+                fig_pie = px.pie(detail_cat_sum, values='금액_숫자', names='카테고리', 
+                                 title=chart_title, 
+                                 color_discrete_sequence=PASTEL_COLORS)
+                fig_pie.update_traces(textposition='inside', textinfo='percent+label')
+                fig_pie.update_layout(height=350, margin=dict(t=40, b=0, l=0, r=0))
+                st.plotly_chart(fig_pie, use_container_width=True, config=PLOT_CONFIG)
+            
+            with dc2:
+                # 막대 차트 
+                fig_bar = px.bar(detail_cat_sum, x='금액_숫자', y='카테고리', orientation='h', 
+                                 title="지출 순위", text_auto=',', 
+                                 color='카테고리', color_discrete_sequence=PASTEL_COLORS)
+                fig_bar.update_layout(showlegend=False, 
+                                      yaxis=dict(categoryorder='total ascending'), 
+                                      height=350, margin=dict(t=40, b=0, l=0, r=0),
+                                      dragmode=False)
+                st.plotly_chart(fig_bar, use_container_width=True, config=PLOT_CONFIG)
         
         st.divider()
 
-        # 3. 탭 구성
+        # 3. 상세 내역 탭 구성
         tab_inc, tab_exp = st.tabs(["🔵 수입 내역", "🔴 지출 내역"])
 
         def render_delete_table(subset_df, type_name):
