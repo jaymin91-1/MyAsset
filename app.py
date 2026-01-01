@@ -44,10 +44,10 @@ CURRENCY_CONFIG = {
 DEFAULT_CATEGORIES = ['식비', '교통비', '쇼핑', '통신비', '주거비', '의료비', '월급', '보너스', '배당금', '기타']
 PASTEL_COLORS = px.colors.qualitative.Pastel
 
-# [핵심] 차트 고정 설정 (줌/팬 비활성화, 툴팁은 유지)
+# 차트 고정 설정
 PLOT_CONFIG = {
-    'displayModeBar': False,   # 상단 툴바 숨김
-    'scrollZoom': False,       # 마우스 휠 줌 비활성화
+    'displayModeBar': False,
+    'scrollZoom': False,
     'showAxisDragHandles': False,
     'doubleClick': False,
 }
@@ -76,7 +76,7 @@ def save_data(df, sheet_name):
         df_save = df.copy()
         df_save['날짜'] = df_save['날짜'].dt.strftime('%Y-%m-%d')
         conn.update(worksheet=sheet_name, data=df_save)
-        st.toast("✅ 데이터가 성공적으로 저장되었습니다.", icon="👌")
+        # 여기서 toast를 띄우지 않고, 버튼 클릭 로직에서 띄웁니다 (초기화 타이밍 때문)
     except Exception as e:
         st.error(f"저장 실패: {e}")
 
@@ -106,9 +106,9 @@ def get_exchange_rates_krw_base():
 # -----------------------------------------------------------------------------
 # 3. 초기화 및 데이터 로드
 # -----------------------------------------------------------------------------
-# [요구사항 2, 3] 타이틀 및 서명 추가
 st.title("📒 가계부")
-st.markdown("<div class='developer-credit'>2026.01.01 Developed by Jay.</div>", unsafe_allow_html=True)
+# [요구사항 2] 점 제거
+st.markdown("<div class='developer-credit'>2026.01.01 Developed by Jay</div>", unsafe_allow_html=True)
 
 if 'current_currency_code' not in st.session_state:
     st.session_state['current_currency_code'] = "KRW"
@@ -116,6 +116,10 @@ if 'custom_categories' not in st.session_state:
     st.session_state['custom_categories'] = []
 if 'rates' not in st.session_state:
     st.session_state['rates'] = get_exchange_rates_krw_base()
+
+# [요구사항 4] 입력 폼 초기화를 위한 Session State 초기값 설정
+if 'input_amount' not in st.session_state: st.session_state['input_amount'] = "0"
+if 'input_memo' not in st.session_state: st.session_state['input_memo'] = ""
 
 selected_code_key = st.radio(
     "국가 선택:",
@@ -195,9 +199,10 @@ with st.sidebar:
         net_usd = net_assets['USD']
         
         st.subheader("🏦 통화별 보유 잔액")
+        # [요구사항 1] 순서 변경: KRW -> TWD -> USD
         st.write(f"🇰🇷 KRW: **{net_krw:,.0f}** 원")
-        st.write(f"🇺🇸 USD: **{net_usd:,.2f}** $")
         st.write(f"🇹🇼 TWD: **{net_twd:,.0f}** NT$")
+        st.write(f"🇺🇸 USD: **{net_usd:,.2f}** $")
         
         st.divider()
 
@@ -213,7 +218,7 @@ with st.sidebar:
         st.markdown(f"**🇺🇸 USD : $ {total_asset_usd:,.2f}**")
 
 # -----------------------------------------------------------------------------
-# 5. 데이터 추가
+# 5. 데이터 추가 (입력 초기화 기능 추가)
 # -----------------------------------------------------------------------------
 st.subheader(f"➕ {current_config['name']} 내역 추가")
 with st.expander("입력창 열기", expanded=True):
@@ -223,8 +228,11 @@ with st.expander("입력창 열기", expanded=True):
     with c3: new_category = st.selectbox("카테고리", final_categories)
 
     c4, c5, c6 = st.columns([1.5, 2, 1])
-    with c4: new_amount_str = st.text_input(f"금액 ({current_symbol})", value="0")
-    with c5: new_memo = st.text_input("메모", placeholder="내용 입력")
+    with c4: 
+        # [요구사항 4] key를 지정하여 session_state로 제어 가능하게 함
+        new_amount_str = st.text_input(f"금액 ({current_symbol})", key="input_amount")
+    with c5: 
+        new_memo = st.text_input("메모", placeholder="내용 입력", key="input_memo")
     with c6:
         st.write("")
         st.write("")
@@ -240,7 +248,17 @@ with st.expander("입력창 열기", expanded=True):
                 }])
                 updated_df = pd.concat([df, new_row], ignore_index=True)
                 save_data(updated_df, current_sheet)
+                
+                # [요구사항 3] 팝업 메시지
+                st.toast("✅ 정상적으로 저장되었습니다!", icon="💾")
+                
+                # [요구사항 4] 입력 필드 초기화
+                st.session_state['input_amount'] = "0"
+                st.session_state['input_memo'] = ""
+                
                 st.rerun()
+            else:
+                st.warning("금액을 0보다 크게 입력해주세요.")
 
 # -----------------------------------------------------------------------------
 # 6. 차트 및 분석
@@ -282,14 +300,12 @@ if not df.empty and '금액' in df.columns:
         fig_monthly.add_trace(go.Bar(x=final_monthly['Month'], y=final_monthly['지출'], name='지출', marker_color='#FF8B94'))
         fig_monthly.add_trace(go.Scatter(x=final_monthly['Month'], y=final_monthly['순수익'], name='순수익', mode='lines+markers', line=dict(color='blue', width=2)))
 
-        # [요구사항 1] dragmode=False 적용
         fig_monthly.update_layout(
             title=f"{selected_year}년 월별 자산 흐름",
             xaxis=dict(tickmode='linear', dtick=1, range=[0.5, 12.5], title='월'),
             barmode='group', height=400, hovermode="x unified",
-            dragmode=False # 드래그/줌 방지
+            dragmode=False 
         )
-        # config 적용
         st.plotly_chart(fig_monthly, use_container_width=True, config=PLOT_CONFIG)
 
     # Tab 2: 카테고리 분석
@@ -304,12 +320,10 @@ if not df.empty and '금액' in df.columns:
                 fig_pie = px.pie(cat_sum, values='금액_숫자', names='카테고리', title="카테고리 비중", color_discrete_sequence=PASTEL_COLORS)
                 fig_pie.update_traces(textposition='inside', textinfo='percent+label')
                 fig_pie.update_layout(height=350, margin=dict(t=30, b=0, l=0, r=0))
-                # config 적용
                 st.plotly_chart(fig_pie, use_container_width=True, config=PLOT_CONFIG)
 
             with col_c2:
                 fig_bar = px.bar(cat_sum, x='금액_숫자', y='카테고리', orientation='h', title="지출 순위", text_auto=',', color='카테고리', color_discrete_sequence=PASTEL_COLORS)
-                # [요구사항 1] dragmode=False 적용
                 fig_bar.update_layout(
                     showlegend=False, 
                     yaxis=dict(categoryorder='total ascending'), 
@@ -317,7 +331,6 @@ if not df.empty and '금액' in df.columns:
                     margin=dict(t=30, b=0, l=0, r=0),
                     dragmode=False
                 )
-                # config 적용
                 st.plotly_chart(fig_bar, use_container_width=True, config=PLOT_CONFIG)
         else:
             st.info("이 해에는 지출 내역이 없습니다.")
@@ -338,14 +351,12 @@ if not df.empty and '금액' in df.columns:
         fig_year.add_trace(go.Bar(x=yearly_pivot['Year'], y=yearly_pivot['지출'], name='지출', marker_color='#FF8B94'), secondary_y=False)
         fig_year.add_trace(go.Scatter(x=yearly_pivot['Year'], y=yearly_pivot['총자산_누적'], name='총자산 누적', mode='lines+markers', line=dict(color='purple', width=3, dash='dot')), secondary_y=True)
 
-        # [요구사항 1] dragmode=False 적용
         fig_year.update_layout(
             title=f"연도별 흐름 ({current_symbol})", 
             xaxis=dict(tickmode='linear', dtick=1), 
             barmode='group', height=400, hovermode="x unified",
             dragmode=False
         )
-        # config 적용
         st.plotly_chart(fig_year, use_container_width=True, config=PLOT_CONFIG)
 
 else:
@@ -402,6 +413,7 @@ if not df.empty:
                     delete_indices = rows_to_delete.index
                     df.drop(delete_indices, inplace=True)
                     save_data(df, current_sheet)
+                    st.toast("✅ 삭제되었습니다.", icon="🗑️")
                     st.rerun()
                 else:
                     st.warning("삭제할 항목을 먼저 선택해주세요.")
