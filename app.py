@@ -6,11 +6,46 @@ import requests
 from streamlit_gsheets import GSheetsConnection
 
 # -----------------------------------------------------------------------------
-# 1. 설정 및 국가/통화 정의
+# [핵심] 모바일 레이아웃 강제 조정 CSS
 # -----------------------------------------------------------------------------
 st.set_page_config(layout="wide", page_title="Asset Management Program", page_icon="💰")
 
-# 구글시트 워크시트(탭) 이름 매핑
+# 아이폰/모바일에서 컬럼이 세로로 쌓이지 않고 '가로 스크롤' 되도록 강제하는 CSS
+st.markdown("""
+<style>
+    /* 모바일에서 컬럼 줄바꿈 방지 및 가로 스크롤 허용 */
+    @media (max-width: 640px) {
+        div[data-testid="stHorizontalBlock"] {
+            flex-wrap: nowrap !important;
+            overflow-x: auto !important;
+            padding-bottom: 10px; /* 스크롤바 공간 확보 */
+        }
+        /* 각 컬럼의 최소 너비 설정 (너무 찌그러지지 않게) */
+        div[data-testid="column"] {
+            min-width: 100px !important;
+            flex: 0 0 auto !important;
+        }
+        /* 삭제 버튼 컬럼은 좀 더 작게 */
+        div[data-testid="column"]:last-child {
+            min-width: 60px !important;
+        }
+    }
+    /* 사이드바 버튼 정렬 */
+    div[data-testid="stVerticalBlock"] > div {
+        gap: 0.5rem;
+    }
+    /* 삭제 버튼 스타일 (빨간 텍스트 느낌) */
+    button[kind="secondary"] {
+        padding: 0rem 0.5rem;
+        border: 1px solid #ffcccc;
+        color: red;
+    }
+</style>
+""", unsafe_allow_html=True)
+
+# -----------------------------------------------------------------------------
+# 1. 설정 및 국가/통화 정의
+# -----------------------------------------------------------------------------
 CURRENCY_CONFIG = {
     "KRW": {"name": "🇰🇷 대한민국 (KRW)", "symbol": "₩", "sheet_name": "KRW"},
     "TWD": {"name": "🇹🇼 대만 (TWD)", "symbol": "NT$", "sheet_name": "TWD"},
@@ -23,11 +58,9 @@ COLOR_SEQUENCE = px.colors.qualitative.Pastel
 # -----------------------------------------------------------------------------
 # 2. 유틸리티 함수
 # -----------------------------------------------------------------------------
-
 conn = st.connection("gsheets", type=GSheetsConnection)
 
 def load_data(sheet_name):
-    """데이터 로드 및 전처리"""
     try:
         df = conn.read(worksheet=sheet_name, ttl=0)
         if df.empty:
@@ -37,8 +70,7 @@ def load_data(sheet_name):
         for col in required_cols:
             if col not in df.columns:
                 df[col] = ""
-                
-        # 날짜 변환
+        
         df['날짜'] = pd.to_datetime(df['날짜'], errors='coerce')
         df = df.dropna(subset=['날짜'])
         return df
@@ -46,18 +78,16 @@ def load_data(sheet_name):
         return pd.DataFrame(columns=['날짜', '구분', '카테고리', '금액', '메모'])
 
 def save_data(df, sheet_name):
-    """데이터 저장"""
     try:
         df_save = df.copy()
-        # 저장 시에는 날짜를 문자열로 변환 (YYYY-MM-DD)
         df_save['날짜'] = df_save['날짜'].dt.strftime('%Y-%m-%d')
         conn.update(worksheet=sheet_name, data=df_save)
+        # 잦은 토스트 알림은 생략 (필요시 주석 해제)
         # st.toast("✅ 저장 완료!", icon="💾") 
     except Exception as e:
         st.error(f"저장 실패: {e}")
 
 def parse_currency(value_str):
-    """문자열/숫자를 정수형 금액으로 변환"""
     if isinstance(value_str, (int, float)): return int(value_str)
     try:
         cleaned = str(value_str).replace(',', '').strip()
@@ -66,12 +96,10 @@ def parse_currency(value_str):
     except: return 0
 
 def get_exchange_rates_krw_base():
-    """KRW 기준 환율 가져오기"""
     try:
         url = "https://open.er-api.com/v6/latest/USD"
         response = requests.get(url)
         data = response.json()
-        
         if data['result'] == 'success':
             usd_krw = data['rates']['KRW']
             usd_twd = data['rates']['TWD']
@@ -89,10 +117,8 @@ st.title("💰 클라우드 자산관리")
 
 if 'current_currency_code' not in st.session_state:
     st.session_state['current_currency_code'] = "KRW"
-
 if 'custom_categories' not in st.session_state:
     st.session_state['custom_categories'] = []
-
 if 'rates' not in st.session_state:
     st.session_state['rates'] = get_exchange_rates_krw_base()
 
@@ -118,11 +144,10 @@ df = load_data(current_sheet)
 existing_cats = []
 if not df.empty and '카테고리' in df.columns:
     existing_cats = df['카테고리'].unique().tolist()
-
 final_categories = sorted(list(set(DEFAULT_CATEGORIES + existing_cats + st.session_state['custom_categories'])))
 
 # -----------------------------------------------------------------------------
-# 4. 사이드바 (설정/자산)
+# 4. 사이드바 (설정/자산) - [수정됨] 카테고리 리스트 UI 개선
 # -----------------------------------------------------------------------------
 with st.sidebar:
     st.header("🗂️ 메뉴")
@@ -136,21 +161,27 @@ with st.sidebar:
                 st.session_state['custom_categories'].append(new_cat_input)
                 st.rerun()
             elif new_cat_input in final_categories:
-                st.warning("이미 존재하는 카테고리입니다.")
+                st.warning("중복된 카테고리입니다.")
         
         st.divider()
-        st.caption("카테고리 목록")
+        st.caption("목록 (우측 X 버튼으로 삭제)")
+        
+        # [수정] 리스트 아이템 UI 개선 (한 줄 유지)
         for cat in final_categories:
-            c1, c2 = st.columns([4, 1])
-            c1.write(f"- {cat}")
-            if c2.button("🗑️", key=f"del_cat_{cat}"):
-                if cat in st.session_state['custom_categories']:
-                    st.session_state['custom_categories'].remove(cat)
-                if not df.empty and '카테고리' in df.columns:
-                    if cat in df['카테고리'].values:
-                        df.loc[df['카테고리'] == cat, '카테고리'] = '기타'
-                        save_data(df, current_sheet)
-                st.rerun()
+            # 비율을 8:2 정도로 주어 텍스트 공간 확보
+            c_text, c_btn = st.columns([0.85, 0.15]) 
+            with c_text:
+                st.markdown(f"<div style='padding-top: 5px;'>{cat}</div>", unsafe_allow_html=True)
+            with c_btn:
+                # 'X' 버튼으로 심플하게 변경
+                if st.button("X", key=f"del_cat_{cat}"):
+                    if cat in st.session_state['custom_categories']:
+                        st.session_state['custom_categories'].remove(cat)
+                    if not df.empty and '카테고리' in df.columns:
+                        if cat in df['카테고리'].values:
+                            df.loc[df['카테고리'] == cat, '카테고리'] = '기타'
+                            save_data(df, current_sheet)
+                    st.rerun()
 
     with tab_assets:
         st.subheader("환율 설정 (기준: KRW)")
@@ -162,9 +193,9 @@ with st.sidebar:
         
         col_r1, col_r2 = st.columns(2)
         with col_r1: 
-            rate_usd_krw = st.number_input("🇺🇸 USD → 🇰🇷 KRW", value=api_usd_krw, format="%.2f")
+            rate_usd_krw = st.number_input("🇺🇸 USD → 🇰🇷", value=api_usd_krw, format="%.2f")
         with col_r2: 
-            rate_twd_krw = st.number_input("🇹🇼 TWD → 🇰🇷 KRW", value=api_twd_krw, format="%.2f")
+            rate_twd_krw = st.number_input("🇹🇼 TWD → 🇰🇷", value=api_twd_krw, format="%.2f")
         
         st.divider()
 
@@ -262,24 +293,17 @@ if not df.empty and '금액_숫자' in df.columns:
             all_months = pd.DataFrame({'Month': range(1, 13)})
             
             m_sum = df_year.groupby(['Month', '구분'])['금액_숫자'].sum().reset_index()
-            # Pivot
             m_pivot = m_sum.pivot(index='Month', columns='구분', values='금액_숫자').reset_index()
-            # Merge
             final_m = pd.merge(all_months, m_pivot, on='Month', how='left').fillna(0)
             
-            # [수정] 중요! '수입' 혹은 '지출' 컬럼이 아예 없을 경우 0으로 생성해주는 안전장치
-            if '수입' not in final_m.columns:
-                final_m['수입'] = 0
-            if '지출' not in final_m.columns:
-                final_m['지출'] = 0
+            if '수입' not in final_m.columns: final_m['수입'] = 0
+            if '지출' not in final_m.columns: final_m['지출'] = 0
             
-            # Melt
             final_m_long = final_m.melt(id_vars='Month', value_vars=['수입', '지출'], var_name='구분', value_name='금액_숫자').fillna(0)
             
             fig = px.bar(final_m_long, x='Month', y='금액_숫자', color='구분', barmode='group',
                          color_discrete_map={'수입': '#A8E6CF', '지출': '#FF8B94'},
                          text_auto=',', title=f"{selected_year}년 월별 흐름")
-            
             fig.update_layout(xaxis=dict(tickmode='linear', dtick=1, range=[0.5, 12.5]))
             st.plotly_chart(fig, use_container_width=True)
 
@@ -306,11 +330,6 @@ if not df.empty and '금액_숫자' in df.columns:
         with tab3:
             df['Year'] = df['날짜'].dt.year
             y_sum = df.groupby(['Year', '구분'])['금액_숫자'].sum().reset_index()
-            
-            # 여기도 마찬가지로 안전장치 추가 (연도별 수입/지출 중 하나만 있을 경우 대비)
-            # px.bar는 데이터가 있으면 알아서 그리므로 melt 에러와는 다르지만,
-            # 색상 매핑을 위해 안전하게 처리
-            
             fig_year = px.bar(
                 y_sum, x='Year', y='금액_숫자', color='구분', barmode='group',
                 text_auto=',', title=f"연도별 전체 흐름 ({current_symbol})",
@@ -319,10 +338,10 @@ if not df.empty and '금액_숫자' in df.columns:
             fig_year.update_layout(xaxis=dict(tickmode='linear', dtick=1))
             st.plotly_chart(fig_year, use_container_width=True)
 else:
-    st.info("데이터가 없습니다. 위 입력창을 통해 자산을 추가해보세요!")
+    st.info("데이터가 없습니다.")
 
 # -----------------------------------------------------------------------------
-# 8. 상세 내역 (수정/삭제 가능 - 버튼 방식)
+# 8. 상세 내역 (수정/삭제 가능 - CSS로 모바일 가로 스크롤 적용)
 # -----------------------------------------------------------------------------
 st.divider()
 st.subheader(f"📝 {selected_year}년 상세 내역 (수정/삭제)")
@@ -339,18 +358,21 @@ if not df.empty:
                 st.caption(f"{type_name} 내역이 없습니다.")
                 return
 
-            st.caption("💡 각 내역을 수정하고 엔터를 치면 자동 저장됩니다. [삭제] 버튼을 누르면 즉시 삭제됩니다.")
+            st.caption("💡 (모바일) 좌우로 스크롤하여 내용을 확인하세요. [삭제] 버튼으로 즉시 삭제됩니다.")
             
-            h1, h2, h3, h4, h5 = st.columns([2, 2, 2, 3, 1])
+            # 헤더
+            h1, h2, h3, h4, h5 = st.columns([1.5, 1.5, 1.5, 2.5, 0.8])
             h1.markdown("**날짜**")
             h2.markdown("**카테고리**")
             h3.markdown("**금액**")
             h4.markdown("**메모**")
             h5.markdown("**관리**")
 
+            # 리스트 렌더링
             for i, row in subset_df.iterrows():
                 with st.container():
-                    c1, c2, c3, c4, c5 = st.columns([2, 2, 2, 3, 1])
+                    # CSS Hack이 적용된 컬럼 비율 (모바일에서 가로 스크롤됨)
+                    c1, c2, c3, c4, c5 = st.columns([1.5, 1.5, 1.5, 2.5, 0.8])
                     
                     idx = row['original_index']
                     k_date = f"date_{idx}"
@@ -360,16 +382,21 @@ if not df.empty:
                     k_del = f"del_{idx}"
 
                     new_date = c1.date_input("", value=row['날짜'], key=k_date, label_visibility="collapsed")
+                    
                     cat_idx = final_categories.index(row['카테고리']) if row['카테고리'] in final_categories else 0
                     new_cat = c2.selectbox("", final_categories, index=cat_idx, key=k_cat, label_visibility="collapsed")
+                    
                     new_amt_val = c3.text_input("", value=str(int(row['금액'])), key=k_amt, label_visibility="collapsed")
+                    
                     new_memo = c4.text_input("", value=row['메모'], key=k_memo, label_visibility="collapsed")
 
-                    if c5.button("삭제", key=k_del, type="primary"):
+                    # 삭제 버튼 (작고 빨간색 느낌)
+                    if c5.button("Del", key=k_del, type="secondary"):
                         df.drop(idx, inplace=True)
                         save_data(df, current_sheet)
                         st.rerun()
 
+                    # 수정 감지 및 저장
                     current_amt = parse_currency(new_amt_val)
                     if (pd.to_datetime(new_date) != row['날짜'] or 
                         new_cat != row['카테고리'] or 
