@@ -1,3 +1,5 @@
+#260101
+
 import streamlit as st
 import pandas as pd
 import plotly.express as px
@@ -386,3 +388,4 @@ if not df.empty:
         st.info("해당 연도의 내역이 없습니다.")
 else:
     st.info("데이터가 없습니다.")
+
