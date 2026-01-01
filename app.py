@@ -6,39 +6,51 @@ import requests
 from streamlit_gsheets import GSheetsConnection
 
 # -----------------------------------------------------------------------------
-# [핵심] 모바일 레이아웃 강제 조정 CSS
+# [핵심] GUI 최적화 CSS (여백 제거, 컴팩트 스타일)
 # -----------------------------------------------------------------------------
 st.set_page_config(layout="wide", page_title="Asset Management Program", page_icon="💰")
 
-# 아이폰/모바일에서 컬럼이 세로로 쌓이지 않고 '가로 스크롤' 되도록 강제하는 CSS
 st.markdown("""
 <style>
-    /* 모바일에서 컬럼 줄바꿈 방지 및 가로 스크롤 허용 */
-    @media (max-width: 640px) {
-        div[data-testid="stHorizontalBlock"] {
-            flex-wrap: nowrap !important;
-            overflow-x: auto !important;
-            padding-bottom: 10px; /* 스크롤바 공간 확보 */
-        }
-        /* 각 컬럼의 최소 너비 설정 (너무 찌그러지지 않게) */
-        div[data-testid="column"] {
-            min-width: 100px !important;
-            flex: 0 0 auto !important;
-        }
-        /* 삭제 버튼 컬럼은 좀 더 작게 */
-        div[data-testid="column"]:last-child {
-            min-width: 60px !important;
-        }
+    /* 1. 컬럼 사이 간격 거의 제거 (좌우 이동 방지) */
+    div[data-testid="stHorizontalBlock"] {
+        gap: 0.1rem !important; /* 간격을 0.1로 최소화 */
     }
-    /* 사이드바 버튼 정렬 */
-    div[data-testid="stVerticalBlock"] > div {
-        gap: 0.5rem;
+    
+    /* 2. 각 컬럼의 불필요한 최소 너비 제거 (화면에 꽉 차게) */
+    div[data-testid="column"] {
+        min-width: 0px !important;
+        flex: 1 1 auto !important;
     }
-    /* 삭제 버튼 스타일 (빨간 텍스트 느낌) */
+
+    /* 3. 입력창/버튼 내부 여백 축소 (더 작고 날씬하게) */
+    .stDateInput input, .stSelectbox div[data-baseweb="select"], .stTextInput input {
+        padding: 0px 5px !important; /* 내부 여백 축소 */
+        min-height: 35px !important;
+        font-size: 14px !important;
+    }
+    
+    /* 4. 삭제 버튼 스타일 (작고 심플하게) */
     button[kind="secondary"] {
-        padding: 0rem 0.5rem;
-        border: 1px solid #ffcccc;
-        color: red;
+        padding: 0px 0px !important;
+        min-height: 35px !important;
+        width: 100% !important;
+        border: 1px solid #ffcccc !important;
+        color: red !important;
+        font-weight: bold !important;
+    }
+
+    /* 5. 사이드바 버튼 정렬 수정 */
+    .sidebar-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 5px 0;
+    }
+    
+    /* 6. 모바일에서 텍스트 줄바꿈 허용 (칸이 좁을 때 대비) */
+    p {
+        word-break: break-all;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -82,8 +94,6 @@ def save_data(df, sheet_name):
         df_save = df.copy()
         df_save['날짜'] = df_save['날짜'].dt.strftime('%Y-%m-%d')
         conn.update(worksheet=sheet_name, data=df_save)
-        # 잦은 토스트 알림은 생략 (필요시 주석 해제)
-        # st.toast("✅ 저장 완료!", icon="💾") 
     except Exception as e:
         st.error(f"저장 실패: {e}")
 
@@ -147,7 +157,7 @@ if not df.empty and '카테고리' in df.columns:
 final_categories = sorted(list(set(DEFAULT_CATEGORIES + existing_cats + st.session_state['custom_categories'])))
 
 # -----------------------------------------------------------------------------
-# 4. 사이드바 (설정/자산) - [수정됨] 카테고리 리스트 UI 개선
+# 4. 사이드바 (설정/자산) - [수정] 간격 좁히기
 # -----------------------------------------------------------------------------
 with st.sidebar:
     st.header("🗂️ 메뉴")
@@ -164,16 +174,15 @@ with st.sidebar:
                 st.warning("중복된 카테고리입니다.")
         
         st.divider()
-        st.caption("목록 (우측 X 버튼으로 삭제)")
+        st.caption("목록")
         
-        # [수정] 리스트 아이템 UI 개선 (한 줄 유지)
         for cat in final_categories:
-            # 비율을 8:2 정도로 주어 텍스트 공간 확보
-            c_text, c_btn = st.columns([0.85, 0.15]) 
+            # [수정] 비율을 [3, 1] 정도로 좁혀서 텍스트와 버튼을 가깝게 배치
+            # 빈 공간(Space)을 아예 없앰
+            c_text, c_btn = st.columns([3, 1]) 
             with c_text:
-                st.markdown(f"<div style='padding-top: 5px;'>{cat}</div>", unsafe_allow_html=True)
+                st.markdown(f"<div style='margin-top: 5px; font-size:14px;'>{cat}</div>", unsafe_allow_html=True)
             with c_btn:
-                # 'X' 버튼으로 심플하게 변경
                 if st.button("X", key=f"del_cat_{cat}"):
                     if cat in st.session_state['custom_categories']:
                         st.session_state['custom_categories'].remove(cat)
@@ -227,6 +236,7 @@ with st.sidebar:
 # -----------------------------------------------------------------------------
 st.subheader(f"➕ {current_config['name']} 내역 추가")
 with st.expander("입력창 열기", expanded=True):
+    # [수정] 입력창도 좀 더 촘촘하게 배치
     c1, c2, c3 = st.columns([1, 1, 1.5])
     with c1: new_date = st.date_input("날짜", datetime.now())
     with c2: new_type = st.selectbox("구분", ["지출", "수입"])
@@ -234,7 +244,7 @@ with st.expander("입력창 열기", expanded=True):
 
     c4, c5, c6 = st.columns([1.5, 2, 1])
     with c4: new_amount_str = st.text_input(f"금액 ({current_symbol})", value="0")
-    with c5: new_memo = st.text_input("메모", placeholder="내용 입력")
+    with c5: new_memo = st.text_input("메모", placeholder="내용")
     with c6:
         st.write("")
         st.write("")
@@ -275,7 +285,6 @@ m3.metric("누적 지출", f"{current_symbol} {exp:,.0f}")
 # 7. 분석 및 차트
 # -----------------------------------------------------------------------------
 st.divider()
-
 selected_year = datetime.now().year 
 
 if not df.empty and '금액_숫자' in df.columns:
@@ -341,62 +350,56 @@ else:
     st.info("데이터가 없습니다.")
 
 # -----------------------------------------------------------------------------
-# 8. 상세 내역 (수정/삭제 가능 - CSS로 모바일 가로 스크롤 적용)
+# 8. 상세 내역 (수정/삭제 가능 - Compact Mode)
 # -----------------------------------------------------------------------------
 st.divider()
-st.subheader(f"📝 {selected_year}년 상세 내역 (수정/삭제)")
+st.subheader(f"📝 {selected_year}년 상세 내역")
 
 if not df.empty:
     df_filtered = df[df['날짜'].dt.year == selected_year].copy()
     df_filtered['original_index'] = df_filtered.index 
 
     if not df_filtered.empty:
-        tab_inc, tab_exp = st.tabs(["🔵 수입 내역 수정", "🔴 지출 내역 수정"])
+        tab_inc, tab_exp = st.tabs(["🔵 수입", "🔴 지출"])
 
         def render_rows(subset_df, type_name):
             if subset_df.empty:
                 st.caption(f"{type_name} 내역이 없습니다.")
                 return
 
-            st.caption("💡 (모바일) 좌우로 스크롤하여 내용을 확인하세요. [삭제] 버튼으로 즉시 삭제됩니다.")
-            
-            # 헤더
-            h1, h2, h3, h4, h5 = st.columns([1.5, 1.5, 1.5, 2.5, 0.8])
-            h1.markdown("**날짜**")
-            h2.markdown("**카테고리**")
-            h3.markdown("**금액**")
-            h4.markdown("**메모**")
-            h5.markdown("**관리**")
+            # 헤더도 비율을 맞춰서 생성 (글자 크기 축소)
+            # 날짜(2) | 카테고리(2) | 금액(2) | 메모(3) | 삭제(0.8)
+            h1, h2, h3, h4, h5 = st.columns([2, 2, 2, 3, 0.8])
+            h1.markdown("<small><b>날짜</b></small>", unsafe_allow_html=True)
+            h2.markdown("<small><b>분류</b></small>", unsafe_allow_html=True)
+            h3.markdown("<small><b>금액</b></small>", unsafe_allow_html=True)
+            h4.markdown("<small><b>메모</b></small>", unsafe_allow_html=True)
+            h5.markdown("<small><b>삭제</b></small>", unsafe_allow_html=True)
 
-            # 리스트 렌더링
             for i, row in subset_df.iterrows():
                 with st.container():
-                    # CSS Hack이 적용된 컬럼 비율 (모바일에서 가로 스크롤됨)
-                    c1, c2, c3, c4, c5 = st.columns([1.5, 1.5, 1.5, 2.5, 0.8])
+                    # [핵심] 빡빡한 비율 설정: 화면 너비에 꽉 차게 5개를 배치
+                    c1, c2, c3, c4, c5 = st.columns([2, 2, 2, 3, 0.8])
                     
                     idx = row['original_index']
-                    k_date = f"date_{idx}"
-                    k_cat = f"cat_{idx}"
-                    k_amt = f"amt_{idx}"
-                    k_memo = f"memo_{idx}"
-                    k_del = f"del_{idx}"
+                    k_date = f"d_{idx}"
+                    k_cat = f"c_{idx}"
+                    k_amt = f"a_{idx}"
+                    k_memo = f"m_{idx}"
+                    k_del = f"x_{idx}"
 
                     new_date = c1.date_input("", value=row['날짜'], key=k_date, label_visibility="collapsed")
-                    
                     cat_idx = final_categories.index(row['카테고리']) if row['카테고리'] in final_categories else 0
                     new_cat = c2.selectbox("", final_categories, index=cat_idx, key=k_cat, label_visibility="collapsed")
-                    
                     new_amt_val = c3.text_input("", value=str(int(row['금액'])), key=k_amt, label_visibility="collapsed")
-                    
                     new_memo = c4.text_input("", value=row['메모'], key=k_memo, label_visibility="collapsed")
 
-                    # 삭제 버튼 (작고 빨간색 느낌)
-                    if c5.button("Del", key=k_del, type="secondary"):
+                    # 삭제 버튼 (버튼 텍스트를 'X'로 줄여서 공간 확보)
+                    if c5.button("X", key=k_del, type="secondary"):
                         df.drop(idx, inplace=True)
                         save_data(df, current_sheet)
                         st.rerun()
 
-                    # 수정 감지 및 저장
                     current_amt = parse_currency(new_amt_val)
                     if (pd.to_datetime(new_date) != row['날짜'] or 
                         new_cat != row['카테고리'] or 
@@ -419,6 +422,6 @@ if not df.empty:
             render_rows(exp_data, "지출")
             
     else:
-        st.caption("해당 연도의 내역이 없습니다.")
+        st.caption("내역 없음")
 else:
-    st.caption("데이터가 없습니다.")
+    st.caption("데이터 없음")
