@@ -55,11 +55,12 @@ PLOT_CONFIG = {
 
 conn = st.connection("gsheets", type=GSheetsConnection)
 
-# [최적화] 데이터 로드 캐싱 (10분)
+# [수정됨] ttl=0을 추가하여 연결 자체의 캐싱 방지
 @st.cache_data(ttl=600)
 def load_data(sheet_name):
     try:
-        df = conn.read(worksheet=sheet_name)
+        # ttl=0을 넣어줘야 load_data.clear() 호출 시 진짜 최신 데이터를 가져옵니다.
+        df = conn.read(worksheet=sheet_name, ttl=0)
         if df.empty:
             return pd.DataFrame(columns=['날짜', '구분', '카테고리', '금액', '메모'])
         
@@ -74,13 +75,13 @@ def load_data(sheet_name):
     except Exception as e:
         return pd.DataFrame(columns=['날짜', '구분', '카테고리', '금액', '메모'])
 
-# [최적화] 데이터 저장 및 캐시 초기화
+# 데이터 저장 및 캐시 초기화
 def save_data(df, sheet_name):
     try:
         df_save = df.copy()
         df_save['날짜'] = df_save['날짜'].dt.strftime('%Y-%m-%d')
         conn.update(worksheet=sheet_name, data=df_save)
-        # 저장 후 캐시 비우기 (다음 로드 때 최신 데이터 반영)
+        # 저장 후 캐시를 비웁니다.
         load_data.clear()
     except Exception as e:
         st.error(f"저장 실패: {e}")
@@ -93,7 +94,7 @@ def parse_currency(value_str):
         return int(float(cleaned))
     except: return 0
 
-# [최적화] 환율 정보 캐싱 (1시간)
+# 환율 정보 캐싱 (1시간)
 @st.cache_data(ttl=3600)
 def get_exchange_rates_krw_base():
     try:
@@ -148,9 +149,9 @@ current_config = CURRENCY_CONFIG[st.session_state['current_currency_code']]
 current_symbol = current_config['symbol']
 current_sheet = current_config['sheet_name']
 
-# 데이터 로드 (캐시 사용)
+# 데이터 로드
 df = load_data(current_sheet)
-# 환율 정보 로드 (캐시 사용)
+# 환율 정보 로드
 api_usd_krw, api_twd_krw = get_exchange_rates_krw_base()
 
 existing_cats = []
@@ -163,7 +164,6 @@ final_categories = sorted(list(set(DEFAULT_CATEGORIES + existing_cats + st.sessi
 # -----------------------------------------------------------------------------
 with st.sidebar:
     st.header("🗂️ 메뉴")
-    # 탭 순서: 자산 현황 -> 설정
     tab_assets, tab_settings = st.tabs(["💱 자산 현황", "⚙️ 설정"])
     
     with tab_assets:
@@ -230,7 +230,7 @@ with st.sidebar:
             st.rerun()
 
 # -----------------------------------------------------------------------------
-# 5. 데이터 추가 (콜백 함수 방식으로 에러 해결)
+# 5. 데이터 추가
 # -----------------------------------------------------------------------------
 st.subheader(f"➕ {current_config['name']} 내역 추가")
 
@@ -252,7 +252,8 @@ def add_transaction(date_val, type_val, category_val):
         }])
         
         updated_df = pd.concat([current_df, new_row], ignore_index=True)
-        save_data(updated_df, current_sheet) # 여기서 캐시도 초기화됨
+        # 저장 및 캐시 초기화
+        save_data(updated_df, current_sheet)
         
         st.toast("✅ 정상적으로 저장되었습니다!", icon="💾")
         
