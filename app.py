@@ -221,4 +221,41 @@ if not df.empty and '금액_숫자' in df.columns:
             df_year['Month'] = df_year['날짜'].dt.month
             m_sum = df_year.groupby(['Month', '구분'])['금액_숫자'].sum().reset_index()
             
-            fig = px.bar(m_sum, x='Month
+            fig = px.bar(m_sum, x='Month', y='금액_숫자', color='구분', barmode='group',
+                         color_discrete_map={'수입': '#A8E6CF', '지출': '#FF8B94'},
+                         text_auto=',', title=f"{selected_year}년 월별 흐름")
+            fig.update_layout(xaxis=dict(tickmode='linear', dtick=1))
+            st.plotly_chart(fig, use_container_width=True)
+
+        with tab2:
+            exp_df = df_year[df_year['구분'] == '지출']
+            if not exp_df.empty:
+                cat_sum = exp_df.groupby('카테고리')['금액_숫자'].sum().reset_index()
+                fig_pie = px.pie(cat_sum, values='금액_숫자', names='카테고리', 
+                                 color_discrete_sequence=COLOR_SEQUENCE, title="카테고리별 지출 비중")
+                st.plotly_chart(fig_pie, use_container_width=True)
+            else:
+                st.info("지출 데이터가 없습니다.")
+else:
+    st.info("데이터가 없습니다. 위 입력창을 통해 자산을 추가해보세요!")
+
+# -----------------------------------------------------------------------------
+# 8. 상세 내역
+# -----------------------------------------------------------------------------
+st.divider()
+
+# [안전 장치 추가] selected_year가 정의된 상태에서만 사용
+st.subheader(f"📝 {selected_year}년 상세 내역 (최신순)")
+
+if not df.empty:
+    display_df = df[df['날짜'].dt.year == selected_year].sort_values('날짜', ascending=False)
+    if not display_df.empty:
+        st.dataframe(
+            display_df[['날짜', '구분', '카테고리', '금액', '메모']],
+            use_container_width=True,
+            hide_index=True
+        )
+    else:
+        st.caption("해당 연도의 내역이 없습니다.")
+else:
+    st.caption("데이터가 없습니다.")
