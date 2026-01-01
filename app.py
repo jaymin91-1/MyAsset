@@ -45,6 +45,7 @@ CURRENCY_CONFIG = {
 DEFAULT_CATEGORIES = ['식비', '교통비', '쇼핑', '통신비', '주거비', '의료비', '월급', '보너스', '배당금', '기타']
 PASTEL_COLORS = px.colors.qualitative.Pastel
 
+# 차트 고정 설정
 PLOT_CONFIG = {
     'displayModeBar': False,
     'scrollZoom': False,
@@ -54,12 +55,10 @@ PLOT_CONFIG = {
 
 conn = st.connection("gsheets", type=GSheetsConnection)
 
-# [최적화 1] 데이터 로드 함수 캐싱 (ttl=600: 10분간 캐시 유지)
-# 데이터 변경(저장/삭제) 시에는 clear_cache()를 통해 초기화됨
+# [최적화] 데이터 로드 캐싱 (10분)
 @st.cache_data(ttl=600)
 def load_data(sheet_name):
     try:
-        # ttl=0 제거 (캐시 사용을 위해)
         df = conn.read(worksheet=sheet_name)
         if df.empty:
             return pd.DataFrame(columns=['날짜', '구분', '카테고리', '금액', '메모'])
@@ -75,13 +74,13 @@ def load_data(sheet_name):
     except Exception as e:
         return pd.DataFrame(columns=['날짜', '구분', '카테고리', '금액', '메모'])
 
-# [최적화 2] 데이터 저장 시 캐시 비우기
+# [최적화] 데이터 저장 및 캐시 초기화
 def save_data(df, sheet_name):
     try:
         df_save = df.copy()
         df_save['날짜'] = df_save['날짜'].dt.strftime('%Y-%m-%d')
         conn.update(worksheet=sheet_name, data=df_save)
-        # 데이터가 변경되었으므로 캐시를 비웁니다.
+        # 저장 후 캐시 비우기 (다음 로드 때 최신 데이터 반영)
         load_data.clear()
     except Exception as e:
         st.error(f"저장 실패: {e}")
@@ -94,7 +93,7 @@ def parse_currency(value_str):
         return int(float(cleaned))
     except: return 0
 
-# [최적화 3] 환율 정보도 자주 바뀌지 않으므로 캐싱 (1시간)
+# [최적화] 환율 정보 캐싱 (1시간)
 @st.cache_data(ttl=3600)
 def get_exchange_rates_krw_base():
     try:
@@ -115,6 +114,7 @@ def get_exchange_rates_krw_base():
 # 3. 초기화 및 데이터 로드
 # -----------------------------------------------------------------------------
 st.title("📒 가계부")
+# Version 및 개발자 정보
 st.markdown("""
 <div class='developer-credit'>
     Version 1.0<br>
@@ -148,9 +148,9 @@ current_config = CURRENCY_CONFIG[st.session_state['current_currency_code']]
 current_symbol = current_config['symbol']
 current_sheet = current_config['sheet_name']
 
-# 캐시된 함수 호출 (속도 향상)
+# 데이터 로드 (캐시 사용)
 df = load_data(current_sheet)
-# 환율 정보 호출
+# 환율 정보 로드 (캐시 사용)
 api_usd_krw, api_twd_krw = get_exchange_rates_krw_base()
 
 existing_cats = []
@@ -159,16 +159,17 @@ if not df.empty and '카테고리' in df.columns:
 final_categories = sorted(list(set(DEFAULT_CATEGORIES + existing_cats + st.session_state['custom_categories'])))
 
 # -----------------------------------------------------------------------------
-# 4. 사이드바 (자산 현황)
+# 4. 사이드바
 # -----------------------------------------------------------------------------
 with st.sidebar:
     st.header("🗂️ 메뉴")
+    # 탭 순서: 자산 현황 -> 설정
     tab_assets, tab_settings = st.tabs(["💱 자산 현황", "⚙️ 설정"])
     
     with tab_assets:
         st.subheader("환율 정보")
         if st.button("🔄 환율 새로고침"):
-            get_exchange_rates_krw_base.clear() # 환율 캐시만 초기화
+            get_exchange_rates_krw_base.clear()
             st.rerun()
 
         col_r1, col_r2 = st.columns(2)
@@ -177,7 +178,7 @@ with st.sidebar:
         
         st.divider()
         
-        # 1. 각 계좌별 잔액 계산 (캐시 덕분에 매우 빨라짐)
+        # 각 계좌별 잔액 계산
         net_assets = {}
         for code, conf in CURRENCY_CONFIG.items():
             _df = load_data(conf['sheet_name'])
@@ -199,7 +200,7 @@ with st.sidebar:
         
         st.divider()
 
-        # 2. 총 자산 추정
+        # 총 자산 추정
         total_asset_krw = net_krw + (net_usd * api_usd_krw) + (net_twd * api_twd_krw)
         total_asset_usd = total_asset_krw / api_usd_krw if api_usd_krw > 0 else 0
         total_asset_twd = total_asset_krw / api_twd_krw if api_twd_krw > 0 else 0
@@ -229,9 +230,38 @@ with st.sidebar:
             st.rerun()
 
 # -----------------------------------------------------------------------------
-# 5. 데이터 추가 (입력 초기화 기능 추가)
+# 5. 데이터 추가 (콜백 함수 방식으로 에러 해결)
 # -----------------------------------------------------------------------------
 st.subheader(f"➕ {current_config['name']} 내역 추가")
+
+# 콜백 함수: 저장 로직 처리 및 입력값 초기화
+def add_transaction(date_val, type_val, category_val):
+    amount_str = st.session_state.get('input_amount', '0')
+    memo_val = st.session_state.get('input_memo', '')
+    
+    final_amount = parse_currency(amount_str)
+    
+    if final_amount > 0:
+        current_df = load_data(current_sheet)
+        new_row = pd.DataFrame([{
+            '날짜': pd.to_datetime(date_val),
+            '구분': type_val,
+            '카테고리': category_val,
+            '금액': final_amount,
+            '메모': memo_val
+        }])
+        
+        updated_df = pd.concat([current_df, new_row], ignore_index=True)
+        save_data(updated_df, current_sheet) # 여기서 캐시도 초기화됨
+        
+        st.toast("✅ 정상적으로 저장되었습니다!", icon="💾")
+        
+        # 콜백 내에서는 안전하게 상태 변경 가능
+        st.session_state['input_amount'] = "0"
+        st.session_state['input_memo'] = ""
+    else:
+        st.toast("⚠️ 금액을 0보다 크게 입력해주세요.", icon="🚫")
+
 with st.expander("입력창 열기", expanded=True):
     c1, c2, c3 = st.columns([1, 1, 1.5])
     with c1: new_date = st.date_input("날짜", datetime.now())
@@ -240,35 +270,20 @@ with st.expander("입력창 열기", expanded=True):
 
     c4, c5, c6 = st.columns([1.5, 2, 1])
     with c4: 
-        new_amount_str = st.text_input(f"금액 ({current_symbol})", key="input_amount")
+        st.text_input(f"금액 ({current_symbol})", key="input_amount")
     with c5: 
-        new_memo = st.text_input("메모", placeholder="내용 입력", key="input_memo")
+        st.text_input("메모", placeholder="내용 입력", key="input_memo")
     with c6:
         st.write("")
         st.write("")
-        if st.button("저장", type="primary", use_container_width=True):
-            final_amount = parse_currency(new_amount_str)
-            if final_amount > 0:
-                new_row = pd.DataFrame([{
-                    '날짜': pd.to_datetime(new_date),
-                    '구분': new_type,
-                    '카테고리': new_category,
-                    '금액': final_amount,
-                    '메모': new_memo
-                }])
-                updated_df = pd.concat([df, new_row], ignore_index=True)
-                # 저장 시 자동으로 load_data.clear() 호출됨
-                save_data(updated_df, current_sheet)
-                
-                st.toast("✅ 정상적으로 저장되었습니다!", icon="💾")
-                
-                # 입력 필드 초기화
-                st.session_state['input_amount'] = "0"
-                st.session_state['input_memo'] = ""
-                
-                st.rerun()
-            else:
-                st.warning("금액을 0보다 크게 입력해주세요.")
+        # on_click 콜백 연결
+        st.button(
+            "저장", 
+            type="primary", 
+            use_container_width=True,
+            on_click=add_transaction,
+            args=(new_date, new_type, new_category)
+        )
 
 # -----------------------------------------------------------------------------
 # 6. 차트 및 분석
@@ -393,7 +408,7 @@ if not df.empty:
         df_filtered = df_filtered[df_filtered['날짜'].dt.month == target_month]
 
     if not df_filtered.empty:
-        # 요약 정보 표시 (총 수입, 총 지출, 도합)
+        # 요약 정보 표시
         summary_inc = df_filtered[df_filtered['구분'] == '수입']['금액'].apply(parse_currency).sum()
         summary_exp = df_filtered[df_filtered['구분'] == '지출']['금액'].apply(parse_currency).sum()
         summary_total = summary_inc - summary_exp
@@ -437,7 +452,7 @@ if not df.empty:
                 if not rows_to_delete.empty:
                     delete_indices = rows_to_delete.index
                     df.drop(delete_indices, inplace=True)
-                    # 삭제 시에도 자동으로 캐시 초기화됨
+                    # 삭제 시에도 자동으로 캐시 초기화
                     save_data(df, current_sheet)
                     st.toast("✅ 삭제되었습니다.", icon="🗑️")
                     st.rerun()
