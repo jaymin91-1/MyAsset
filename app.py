@@ -18,6 +18,7 @@ CURRENCY_CONFIG = {
 }
 
 DEFAULT_CATEGORIES = ['식비', '교통비', '쇼핑', '통신비', '주거비', '의료비', '월급', '보너스', '배당금', '기타']
+# [요구사항 2] 파스텔 톤 색상 적용
 COLOR_SEQUENCE = px.colors.qualitative.Pastel
 
 # -----------------------------------------------------------------------------
@@ -52,7 +53,8 @@ def save_data(df, sheet_name):
         # 저장 시에는 날짜를 문자열로 변환 (YYYY-MM-DD)
         df_save['날짜'] = df_save['날짜'].dt.strftime('%Y-%m-%d')
         conn.update(worksheet=sheet_name, data=df_save)
-        st.toast("✅ 데이터가 성공적으로 저장되었습니다!", icon="💾")
+        # 잦은 알림 방지를 위해 토스트는 생략하거나 필요시 주석 해제
+        # st.toast("✅ 저장 완료!", icon="💾") 
     except Exception as e:
         st.error(f"저장 실패: {e}")
 
@@ -66,19 +68,16 @@ def parse_currency(value_str):
     except: return 0
 
 def get_exchange_rates_krw_base():
-    """KRW 기준 환율 가져오기 (1 USD = ? KRW, 1 TWD = ? KRW)"""
+    """KRW 기준 환율 가져오기"""
     try:
         url = "https://open.er-api.com/v6/latest/USD"
         response = requests.get(url)
         data = response.json()
         
         if data['result'] == 'success':
-            usd_krw = data['rates']['KRW'] # 1 USD -> KRW
-            usd_twd = data['rates']['TWD'] # 1 USD -> TWD
-            
-            # 1 TWD -> KRW 계산 (Cross Rate)
+            usd_krw = data['rates']['KRW']
+            usd_twd = data['rates']['TWD']
             twd_krw = usd_krw / usd_twd if usd_twd > 0 else 0
-            
             return usd_krw, twd_krw
         else:
             return 1400.0, 43.0
@@ -93,15 +92,12 @@ st.title("💰 클라우드 자산관리")
 if 'current_currency_code' not in st.session_state:
     st.session_state['current_currency_code'] = "KRW"
 
-# 커스텀 카테고리 관리
 if 'custom_categories' not in st.session_state:
     st.session_state['custom_categories'] = []
 
-# 환율 상태 관리 (새로고침 기능을 위해 session_state 사용)
 if 'rates' not in st.session_state:
     st.session_state['rates'] = get_exchange_rates_krw_base()
 
-# 국가 선택 라디오 버튼
 selected_code_key = st.radio(
     "국가 선택:",
     options=list(CURRENCY_CONFIG.keys()),
@@ -119,16 +115,13 @@ current_config = CURRENCY_CONFIG[st.session_state['current_currency_code']]
 current_symbol = current_config['symbol']
 current_sheet = current_config['sheet_name']
 
-# 데이터 로드
 df = load_data(current_sheet)
 
-# 카테고리 병합 (기본 + 데이터 내 존재 + 커스텀)
 existing_cats = []
 if not df.empty and '카테고리' in df.columns:
     existing_cats = df['카테고리'].unique().tolist()
 
 final_categories = sorted(list(set(DEFAULT_CATEGORIES + existing_cats + st.session_state['custom_categories'])))
-# '기타'는 항상 마지막이나 처음에 두는게 좋지만 여기선 정렬순 유지
 
 # -----------------------------------------------------------------------------
 # 4. 사이드바 (설정/자산)
@@ -137,11 +130,8 @@ with st.sidebar:
     st.header("🗂️ 메뉴")
     tab_settings, tab_assets = st.tabs(["⚙️ 설정", "💱 자산 현황"])
     
-    # [요구사항 1] 카테고리 추가/삭제 및 '기타' 매핑
     with tab_settings:
         st.subheader("카테고리 관리")
-        
-        # 추가
         new_cat_input = st.text_input("새 카테고리 추가")
         if st.button("추가", use_container_width=True):
             if new_cat_input and new_cat_input not in final_categories:
@@ -151,47 +141,35 @@ with st.sidebar:
                 st.warning("이미 존재하는 카테고리입니다.")
         
         st.divider()
-        st.caption("카테고리 목록 (삭제 시 기존 내역은 '기타'로 변경됨)")
-        
-        # 리스트 및 삭제 버튼
-        # 주의: 기본 카테고리는 삭제 불가하게 하거나, 편의상 모두 허용할 수 있음. 여기선 모두 허용하되 경고.
+        st.caption("카테고리 목록")
         for cat in final_categories:
             c1, c2 = st.columns([4, 1])
             c1.write(f"- {cat}")
             if c2.button("🗑️", key=f"del_cat_{cat}"):
-                # 1. 커스텀 리스트에서 제거
                 if cat in st.session_state['custom_categories']:
                     st.session_state['custom_categories'].remove(cat)
-                
-                # 2. 데이터프레임에서 해당 카테고리를 '기타'로 변경
                 if not df.empty and '카테고리' in df.columns:
                     if cat in df['카테고리'].values:
                         df.loc[df['카테고리'] == cat, '카테고리'] = '기타'
-                        save_data(df, current_sheet) # 변경사항 즉시 저장
-                
+                        save_data(df, current_sheet)
                 st.rerun()
 
-    # [요구사항 2, 3] 환율 KRW 기준, 새로고침, 국기 추가
     with tab_assets:
         st.subheader("환율 설정 (기준: KRW)")
-        
         if st.button("🔄 환율 새로고침", use_container_width=True):
             st.session_state['rates'] = get_exchange_rates_krw_base()
             st.rerun()
 
         api_usd_krw, api_twd_krw = st.session_state['rates']
         
-        # 국기 이모지 추가
         col_r1, col_r2 = st.columns(2)
         with col_r1: 
             rate_usd_krw = st.number_input("🇺🇸 USD → 🇰🇷 KRW", value=api_usd_krw, format="%.2f")
         with col_r2: 
             rate_twd_krw = st.number_input("🇹🇼 TWD → 🇰🇷 KRW", value=api_twd_krw, format="%.2f")
         
-        st.caption(f"※ 1달러/1대만달러가 몇 원인지 입력")
         st.divider()
 
-        # 자산 계산 로직 (KRW Base)
         net_assets = {}
         for code, conf in CURRENCY_CONFIG.items():
             _df = load_data(conf['sheet_name'])
@@ -206,10 +184,7 @@ with st.sidebar:
         net_twd = net_assets['TWD']
         net_usd = net_assets['USD']
 
-        # 총 자산 계산 (모두 원화로 환산)
         total_asset_krw = net_krw + (net_usd * rate_usd_krw) + (net_twd * rate_twd_krw)
-        
-        # 역산 (원화 총액을 다시 외화로)
         total_asset_usd = total_asset_krw / rate_usd_krw if rate_usd_krw > 0 else 0
         total_asset_twd = total_asset_krw / rate_twd_krw if rate_twd_krw > 0 else 0
 
@@ -219,7 +194,7 @@ with st.sidebar:
         st.metric("Total TWD", f"NT$ {total_asset_twd:,.0f}")
 
 # -----------------------------------------------------------------------------
-# 5. 데이터 추가 (입력)
+# 5. 데이터 추가
 # -----------------------------------------------------------------------------
 st.subheader(f"➕ {current_config['name']} 내역 추가")
 with st.expander("입력창 열기", expanded=True):
@@ -286,11 +261,24 @@ if not df.empty and '금액_숫자' in df.columns:
         
         with tab1:
             df_year['Month'] = df_year['날짜'].dt.month
+            # [요구사항 1] 1~12월 모든 데이터 채우기
+            all_months = pd.DataFrame({'Month': range(1, 13)})
+            
             m_sum = df_year.groupby(['Month', '구분'])['금액_숫자'].sum().reset_index()
-            fig = px.bar(m_sum, x='Month', y='금액_숫자', color='구분', barmode='group',
-                         color_discrete_map={'수입': '#A8E6CF', '지출': '#FF8B94'},
+            # Pivot을 사용해 수입/지출을 컬럼으로 만들고, 빈 월을 merge로 채움
+            m_pivot = m_sum.pivot(index='Month', columns='구분', values='금액_숫자').reset_index()
+            final_m = pd.merge(all_months, m_pivot, on='Month', how='left').fillna(0)
+            
+            # 다시 Long format으로 변환 (Plotly용)
+            final_m_long = final_m.melt(id_vars='Month', value_vars=['수입', '지출'], var_name='구분', value_name='금액_숫자').fillna(0)
+            
+            # [요구사항 2] 파스텔 톤 적용
+            fig = px.bar(final_m_long, x='Month', y='금액_숫자', color='구분', barmode='group',
+                         color_discrete_map={'수입': '#A8E6CF', '지출': '#FF8B94'}, # 파스텔 그린/레드
                          text_auto=',', title=f"{selected_year}년 월별 흐름")
-            fig.update_layout(xaxis=dict(tickmode='linear', dtick=1))
+            
+            # [요구사항 1] X축 모든 월 표시
+            fig.update_layout(xaxis=dict(tickmode='linear', dtick=1, range=[0.5, 12.5]))
             st.plotly_chart(fig, use_container_width=True)
 
         with tab2:
@@ -300,11 +288,13 @@ if not df.empty and '금액_숫자' in df.columns:
                 
                 col_pie, col_bar = st.columns(2)
                 with col_pie:
+                    # [요구사항 2] 파스텔 톤 적용
                     fig_pie = px.pie(cat_sum, values='금액_숫자', names='카테고리', 
                                      color_discrete_sequence=COLOR_SEQUENCE, title="카테고리 비중")
                     fig_pie.update_traces(textposition='inside', textinfo='percent+label')
                     st.plotly_chart(fig_pie, use_container_width=True)
                 with col_bar:
+                    # [요구사항 2] 파스텔 톤 적용
                     fig_bar = px.bar(cat_sum, x='금액_숫자', y='카테고리', orientation='h',
                                      color='카테고리', color_discrete_sequence=COLOR_SEQUENCE,
                                      text_auto=',', title="지출 순위")
@@ -316,6 +306,7 @@ if not df.empty and '금액_숫자' in df.columns:
         with tab3:
             df['Year'] = df['날짜'].dt.year
             y_sum = df.groupby(['Year', '구분'])['금액_숫자'].sum().reset_index()
+            # [요구사항 2] 파스텔 톤 적용
             fig_year = px.bar(
                 y_sum, x='Year', y='금액_숫자', color='구분', barmode='group',
                 text_auto=',', title=f"연도별 전체 흐름 ({current_symbol})",
@@ -327,93 +318,90 @@ else:
     st.info("데이터가 없습니다. 위 입력창을 통해 자산을 추가해보세요!")
 
 # -----------------------------------------------------------------------------
-# 8. 상세 내역 (수정/삭제 가능)
+# 8. 상세 내역 (수정/삭제 가능 - 버튼 방식)
 # -----------------------------------------------------------------------------
 st.divider()
 st.subheader(f"📝 {selected_year}년 상세 내역 (수정/삭제)")
 
 if not df.empty:
-    # 1. 연도 필터링
     df_filtered = df[df['날짜'].dt.year == selected_year].copy()
-    
+    # 인덱스를 보존하여 삭제 시 정확한 행을 찾도록 함
+    df_filtered['original_index'] = df_filtered.index 
+
     if not df_filtered.empty:
-        # [요구사항 4] 수입/지출 탭 분리
         tab_inc, tab_exp = st.tabs(["🔵 수입 내역 수정", "🔴 지출 내역 수정"])
-        
-        # 공통 편집 로직 함수
-        def editor_logic(subset_df, type_name):
+
+        def render_rows(subset_df, type_name):
             if subset_df.empty:
                 st.caption(f"{type_name} 내역이 없습니다.")
                 return
 
-            st.caption("💡 팁: '삭제' 체크박스를 선택하고 아래 [변경사항 저장]을 누르면 삭제됩니다. 내용도 직접 수정 가능합니다.")
+            st.caption("💡 각 내역을 수정하고 엔터를 치면 자동 저장됩니다. [삭제] 버튼을 누르면 즉시 삭제됩니다.")
             
-            # 삭제용 체크박스 컬럼 추가
-            subset_df = subset_df.copy()
-            subset_df.insert(0, "삭제", False) # 맨 앞에 삭제 컬럼 추가
+            # 헤더
+            h1, h2, h3, h4, h5 = st.columns([2, 2, 2, 3, 1])
+            h1.markdown("**날짜**")
+            h2.markdown("**카테고리**")
+            h3.markdown("**금액**")
+            h4.markdown("**메모**")
+            h5.markdown("**관리**")
 
-            # Data Editor 설정
-            edited_df = st.data_editor(
-                subset_df,
-                key=f"editor_{selected_year}_{type_name}",
-                use_container_width=True,
-                hide_index=True,
-                num_rows="dynamic", # 행 추가 기능 활성화
-                column_config={
-                    "삭제": st.column_config.CheckboxColumn(
-                        "삭제?",
-                        help="체크 후 저장 버튼을 누르면 삭제됩니다.",
-                        default=False,
-                    ),
-                    "날짜": st.column_config.DateColumn(
-                        "날짜",
-                        format="YYYY-MM-DD",
-                        step=1,
-                    ),
-                    "카테고리": st.column_config.SelectboxColumn(
-                        "카테고리",
-                        options=final_categories, # [요구사항 5] 콤보박스 선택
-                        required=True,
-                    ),
-                    "금액": st.column_config.NumberColumn(
-                        "금액",
-                        min_value=0,
-                        format="%d",
-                    ),
-                    "메모": st.column_config.TextColumn("메모"),
-                    "구분": st.column_config.TextColumn("구분", disabled=True), # 구분은 수정 불가 (탭으로 구분되므로)
-                }
-            )
+            # 반복문으로 각 행 렌더링
+            for i, row in subset_df.iterrows():
+                with st.container():
+                    c1, c2, c3, c4, c5 = st.columns([2, 2, 2, 3, 1])
+                    
+                    # 위젯 키(Key) 생성
+                    idx = row['original_index']
+                    k_date = f"date_{idx}"
+                    k_cat = f"cat_{idx}"
+                    k_amt = f"amt_{idx}"
+                    k_memo = f"memo_{idx}"
+                    k_del = f"del_{idx}"
 
-            # 변경사항 저장 버튼
-            if st.button(f"💾 {type_name} 변경사항 저장", key=f"save_{type_name}"):
-                # 1. 삭제 체크된 행 제거
-                to_keep = edited_df[edited_df['삭제'] == False].drop(columns=['삭제'])
-                
-                # 2. 원본 df에서 해당 연도/타입 데이터를 제외하고, 수정된 데이터를 합침
-                # (주의: 인덱스가 아닌 날짜/내용 매칭이 어려우므로 전체 교체 방식 사용)
-                
-                # 현재 보고 있는 데이터 외의 것들 (다른 연도 혹은 다른 구분)
-                other_data = df[~((df['날짜'].dt.year == selected_year) & (df['구분'] == type_name))]
-                
-                # 데이터 포맷 정리
-                to_keep['날짜'] = pd.to_datetime(to_keep['날짜'])
-                # 금액, 카테고리 등 필수값 처리
-                
-                # 최종 합치기
-                final_df = pd.concat([other_data, to_keep], ignore_index=True)
-                
-                # 저장
-                save_data(final_df, current_sheet)
-                st.rerun()
+                    # 1. 날짜 수정
+                    new_date = c1.date_input("", value=row['날짜'], key=k_date, label_visibility="collapsed")
+                    
+                    # 2. 카테고리 수정
+                    cat_idx = final_categories.index(row['카테고리']) if row['카테고리'] in final_categories else 0
+                    new_cat = c2.selectbox("", final_categories, index=cat_idx, key=k_cat, label_visibility="collapsed")
+
+                    # 3. 금액 수정
+                    new_amt_val = c3.text_input("", value=str(int(row['금액'])), key=k_amt, label_visibility="collapsed")
+                    
+                    # 4. 메모 수정
+                    new_memo = c4.text_input("", value=row['메모'], key=k_memo, label_visibility="collapsed")
+
+                    # [요구사항 3] 삭제 버튼 (빨간색)
+                    # type="primary"는 테마에 따라 붉은색 계열로 표시됨
+                    if c5.button("삭제", key=k_del, type="primary"):
+                        # 삭제 로직: 원본 df에서 해당 인덱스 제거
+                        df.drop(idx, inplace=True)
+                        save_data(df, current_sheet)
+                        st.rerun()
+
+                    # 변경 감지 및 저장
+                    # 값들이 초기값(row)과 다르면 저장
+                    current_amt = parse_currency(new_amt_val)
+                    if (pd.to_datetime(new_date) != row['날짜'] or 
+                        new_cat != row['카테고리'] or 
+                        current_amt != int(row['금액']) or 
+                        new_memo != row['메모']):
+                        
+                        df.at[idx, '날짜'] = pd.to_datetime(new_date)
+                        df.at[idx, '카테고리'] = new_cat
+                        df.at[idx, '금액'] = current_amt
+                        df.at[idx, '메모'] = new_memo
+                        save_data(df, current_sheet)
+                        st.rerun()
 
         with tab_inc:
             inc_data = df_filtered[df_filtered['구분'] == '수입'].sort_values('날짜', ascending=False)
-            editor_logic(inc_data, "수입")
+            render_rows(inc_data, "수입")
                 
         with tab_exp:
             exp_data = df_filtered[df_filtered['구분'] == '지출'].sort_values('날짜', ascending=False)
-            editor_logic(exp_data, "지출")
+            render_rows(exp_data, "지출")
             
     else:
         st.caption("해당 연도의 내역이 없습니다.")
