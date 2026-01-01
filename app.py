@@ -26,6 +26,7 @@ st.markdown("""
         text-align: right;
         color: gray;
         font-size: 0.9em;
+        line-height: 1.4;
         margin-top: -10px;
         margin-bottom: 20px;
     }
@@ -106,7 +107,13 @@ def get_exchange_rates_krw_base():
 # 3. 초기화 및 데이터 로드
 # -----------------------------------------------------------------------------
 st.title("📒 가계부")
-st.markdown("<div class='developer-credit'>2026.01.01 Developed by Jay</div>", unsafe_allow_html=True)
+# [요구사항 2] Version 정보 추가
+st.markdown("""
+<div class='developer-credit'>
+    Version 1.0<br>
+    2026.01.01 Developed by Jay
+</div>
+""", unsafe_allow_html=True)
 
 if 'current_currency_code' not in st.session_state:
     st.session_state['current_currency_code'] = "KRW"
@@ -148,26 +155,9 @@ final_categories = sorted(list(set(DEFAULT_CATEGORIES + existing_cats + st.sessi
 # -----------------------------------------------------------------------------
 with st.sidebar:
     st.header("🗂️ 메뉴")
-    tab_settings, tab_assets = st.tabs(["⚙️ 설정", "💱 자산 현황"])
+    # [요구사항 3] 자산 현황을 앞으로, 설정을 뒤로 변경
+    tab_assets, tab_settings = st.tabs(["💱 자산 현황", "⚙️ 설정"])
     
-    with tab_settings:
-        st.subheader("카테고리 관리")
-        new_cat_input = st.text_input("새 카테고리 입력")
-        if st.button("추가하기", use_container_width=True):
-            if new_cat_input and new_cat_input not in final_categories:
-                st.session_state['custom_categories'].append(new_cat_input)
-                st.rerun()
-        
-        st.divider()
-        cat_to_delete = st.selectbox("삭제할 카테고리", ["(선택안함)"] + final_categories)
-        if cat_to_delete != "(선택안함)" and st.button("삭제 실행"):
-            if cat_to_delete in st.session_state['custom_categories']:
-                st.session_state['custom_categories'].remove(cat_to_delete)
-            if not df.empty:
-                df.loc[df['카테고리'] == cat_to_delete, '카테고리'] = '기타'
-                save_data(df, current_sheet)
-            st.rerun()
-
     with tab_assets:
         st.subheader("환율 정보")
         if st.button("🔄 환율 새로고침"):
@@ -198,8 +188,7 @@ with st.sidebar:
         
         st.subheader("🏦 통화별 보유 잔액")
         
-        # [요구사항 1] 글자 크기 줄이기 (HTML/CSS 사용)
-        # font-size를 조절하여 말줄임표(...) 현상을 방지
+        # 글자 크기 조정 (HTML/CSS)
         st.markdown(f"<span style='font-size:16px;'>🇰🇷 KRW: <b>{net_krw:,.0f}</b> 원</span>", unsafe_allow_html=True)
         st.markdown(f"<span style='font-size:16px;'>🇹🇼 TWD: <b>{net_twd:,.0f}</b> NT$</span>", unsafe_allow_html=True)
         st.markdown(f"<span style='font-size:16px;'>🇺🇸 USD: <b>{net_usd:,.2f}</b> $</span>", unsafe_allow_html=True)
@@ -216,6 +205,24 @@ with st.sidebar:
         st.markdown(f"**🇰🇷 KRW : ₩ {total_asset_krw:,.0f}**")
         st.markdown(f"**🇹🇼 TWD : NT$ {total_asset_twd:,.0f}**")
         st.markdown(f"**🇺🇸 USD : $ {total_asset_usd:,.2f}**")
+
+    with tab_settings:
+        st.subheader("카테고리 관리")
+        new_cat_input = st.text_input("새 카테고리 입력")
+        if st.button("추가하기", use_container_width=True):
+            if new_cat_input and new_cat_input not in final_categories:
+                st.session_state['custom_categories'].append(new_cat_input)
+                st.rerun()
+        
+        st.divider()
+        cat_to_delete = st.selectbox("삭제할 카테고리", ["(선택안함)"] + final_categories)
+        if cat_to_delete != "(선택안함)" and st.button("삭제 실행"):
+            if cat_to_delete in st.session_state['custom_categories']:
+                st.session_state['custom_categories'].remove(cat_to_delete)
+            if not df.empty:
+                df.loc[df['카테고리'] == cat_to_delete, '카테고리'] = '기타'
+                save_data(df, current_sheet)
+            st.rerun()
 
 # -----------------------------------------------------------------------------
 # 5. 데이터 추가 (입력 초기화 기능 추가)
@@ -381,17 +388,16 @@ if not df.empty:
         df_filtered = df_filtered[df_filtered['날짜'].dt.month == target_month]
 
     if not df_filtered.empty:
-        # [요구사항 2] 요약 정보 표시 (총 수입, 총 지출, 도합)
-        # 선택된 데이터(df_filtered)를 기준으로 계산
+        # 요약 정보 표시 (총 수입, 총 지출, 도합)
         summary_inc = df_filtered[df_filtered['구분'] == '수입']['금액'].apply(parse_currency).sum()
         summary_exp = df_filtered[df_filtered['구분'] == '지출']['금액'].apply(parse_currency).sum()
         summary_total = summary_inc - summary_exp
         
-        # 3단 컬럼으로 표시
         sm1, sm2, sm3 = st.columns(3)
-        sm1.metric("➕ 총 수입", f"{summary_inc:,.0f}")
-        sm2.metric("➖ 총 지출", f"{summary_exp:,.0f}")
-        sm3.metric("💰 도합", f"{summary_total:,.0f}", delta=f"{summary_total:,.0f}")
+        # [요구사항 1] 통화 단위(current_symbol) 추가
+        sm1.metric("➕ 총 수입", f"{current_symbol} {summary_inc:,.0f}")
+        sm2.metric("➖ 총 지출", f"{current_symbol} {summary_exp:,.0f}")
+        sm3.metric("💰 도합", f"{current_symbol} {summary_total:,.0f}", delta=f"{current_symbol} {summary_total:,.0f}")
         
         st.divider()
 
