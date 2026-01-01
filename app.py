@@ -10,7 +10,7 @@ from streamlit_gsheets import GSheetsConnection
 # -----------------------------------------------------------------------------
 # 1. 페이지 설정
 # -----------------------------------------------------------------------------
-st.set_page_config(layout="wide", page_title="우리집 가계부", page_icon="🏠")
+st.set_page_config(layout="wide", page_title="가계부", page_icon="📒")
 
 # 스타일 설정
 st.markdown("""
@@ -22,11 +22,12 @@ st.markdown("""
         font-size: 20px !important;
         font-weight: bold;
     }
-    .asset-box {
-        padding: 10px;
-        background-color: #f0f2f6;
-        border-radius: 10px;
-        margin-bottom: 10px;
+    .developer-credit {
+        text-align: right;
+        color: gray;
+        font-size: 0.9em;
+        margin-top: -10px;
+        margin-bottom: 20px;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -42,6 +43,14 @@ CURRENCY_CONFIG = {
 
 DEFAULT_CATEGORIES = ['식비', '교통비', '쇼핑', '통신비', '주거비', '의료비', '월급', '보너스', '배당금', '기타']
 PASTEL_COLORS = px.colors.qualitative.Pastel
+
+# [핵심] 차트 고정 설정 (줌/팬 비활성화, 툴팁은 유지)
+PLOT_CONFIG = {
+    'displayModeBar': False,   # 상단 툴바 숨김
+    'scrollZoom': False,       # 마우스 휠 줌 비활성화
+    'showAxisDragHandles': False,
+    'doubleClick': False,
+}
 
 conn = st.connection("gsheets", type=GSheetsConnection)
 
@@ -97,7 +106,9 @@ def get_exchange_rates_krw_base():
 # -----------------------------------------------------------------------------
 # 3. 초기화 및 데이터 로드
 # -----------------------------------------------------------------------------
-st.title("🏠 우리집 가계부")
+# [요구사항 2, 3] 타이틀 및 서명 추가
+st.title("📒 가계부")
+st.markdown("<div class='developer-credit'>2026.01.01 Developed by Jay.</div>", unsafe_allow_html=True)
 
 if 'current_currency_code' not in st.session_state:
     st.session_state['current_currency_code'] = "KRW"
@@ -190,22 +201,16 @@ with st.sidebar:
         
         st.divider()
 
-        # 2. 총 자산 추정 (모든 통화로 변환)
-        # 기본 KRW 합산
+        # 2. 총 자산 추정
         total_asset_krw = net_krw + (net_usd * api_usd_krw) + (net_twd * api_twd_krw)
-        
-        # KRW 합산액을 다시 각 통화로 환산
         total_asset_usd = total_asset_krw / api_usd_krw if api_usd_krw > 0 else 0
         total_asset_twd = total_asset_krw / api_twd_krw if api_twd_krw > 0 else 0
         
         st.subheader("💰 총 자산 추정 (합산)")
         st.caption("※ 현재 환율 기준으로 모든 자산을 합산한 추정치입니다.")
-        
-        # [수정] 3가지 통화 모두 표시
         st.markdown(f"**🇰🇷 KRW : ₩ {total_asset_krw:,.0f}**")
         st.markdown(f"**🇹🇼 TWD : NT$ {total_asset_twd:,.0f}**")
         st.markdown(f"**🇺🇸 USD : $ {total_asset_usd:,.2f}**")
-
 
 # -----------------------------------------------------------------------------
 # 5. 데이터 추가
@@ -242,25 +247,19 @@ with st.expander("입력창 열기", expanded=True):
 # -----------------------------------------------------------------------------
 st.divider()
 
-# [중요 수정] selected_year 초기화를 조건문 밖으로 꺼냄
 current_year = datetime.now().year
-selected_year = current_year # 기본값 설정 (에러 방지용)
+selected_year = current_year
 
-# 데이터가 있으면 연도 리스트를 가져와서 선택하게 함
 if not df.empty and '날짜' in df.columns:
     df['날짜'] = pd.to_datetime(df['날짜'])
     years = sorted(df['날짜'].dt.year.unique(), reverse=True)
     if years:
         selected_year = st.selectbox("📅 분석할 연도 선택:", years, index=0)
 
-# 차트 그리기 로직 (데이터가 있을 때만 실행)
 if not df.empty and '금액' in df.columns:
     df['금액_숫자'] = df['금액'].apply(parse_currency)
     
-    # 탭 구성
     tab_chart1, tab_chart2, tab_chart3 = st.tabs(["📊 월별 흐름", "🍩 지출 분석 (카테고리)", "📈 연도별 흐름"])
-    
-    # ... (차트 그리기 로직은 동일) ...
     
     # Tab 1: 월별 흐름
     with tab_chart1:
@@ -283,12 +282,15 @@ if not df.empty and '금액' in df.columns:
         fig_monthly.add_trace(go.Bar(x=final_monthly['Month'], y=final_monthly['지출'], name='지출', marker_color='#FF8B94'))
         fig_monthly.add_trace(go.Scatter(x=final_monthly['Month'], y=final_monthly['순수익'], name='순수익', mode='lines+markers', line=dict(color='blue', width=2)))
 
+        # [요구사항 1] dragmode=False 적용
         fig_monthly.update_layout(
             title=f"{selected_year}년 월별 자산 흐름",
             xaxis=dict(tickmode='linear', dtick=1, range=[0.5, 12.5], title='월'),
-            barmode='group', height=400, hovermode="x unified"
+            barmode='group', height=400, hovermode="x unified",
+            dragmode=False # 드래그/줌 방지
         )
-        st.plotly_chart(fig_monthly, use_container_width=True)
+        # config 적용
+        st.plotly_chart(fig_monthly, use_container_width=True, config=PLOT_CONFIG)
 
     # Tab 2: 카테고리 분석
     with tab_chart2:
@@ -302,11 +304,21 @@ if not df.empty and '금액' in df.columns:
                 fig_pie = px.pie(cat_sum, values='금액_숫자', names='카테고리', title="카테고리 비중", color_discrete_sequence=PASTEL_COLORS)
                 fig_pie.update_traces(textposition='inside', textinfo='percent+label')
                 fig_pie.update_layout(height=350, margin=dict(t=30, b=0, l=0, r=0))
-                st.plotly_chart(fig_pie, use_container_width=True)
+                # config 적용
+                st.plotly_chart(fig_pie, use_container_width=True, config=PLOT_CONFIG)
+
             with col_c2:
                 fig_bar = px.bar(cat_sum, x='금액_숫자', y='카테고리', orientation='h', title="지출 순위", text_auto=',', color='카테고리', color_discrete_sequence=PASTEL_COLORS)
-                fig_bar.update_layout(showlegend=False, yaxis=dict(categoryorder='total ascending'), height=350, margin=dict(t=30, b=0, l=0, r=0))
-                st.plotly_chart(fig_bar, use_container_width=True)
+                # [요구사항 1] dragmode=False 적용
+                fig_bar.update_layout(
+                    showlegend=False, 
+                    yaxis=dict(categoryorder='total ascending'), 
+                    height=350, 
+                    margin=dict(t=30, b=0, l=0, r=0),
+                    dragmode=False
+                )
+                # config 적용
+                st.plotly_chart(fig_bar, use_container_width=True, config=PLOT_CONFIG)
         else:
             st.info("이 해에는 지출 내역이 없습니다.")
 
@@ -326,8 +338,15 @@ if not df.empty and '금액' in df.columns:
         fig_year.add_trace(go.Bar(x=yearly_pivot['Year'], y=yearly_pivot['지출'], name='지출', marker_color='#FF8B94'), secondary_y=False)
         fig_year.add_trace(go.Scatter(x=yearly_pivot['Year'], y=yearly_pivot['총자산_누적'], name='총자산 누적', mode='lines+markers', line=dict(color='purple', width=3, dash='dot')), secondary_y=True)
 
-        fig_year.update_layout(title=f"연도별 흐름 ({current_symbol})", xaxis=dict(tickmode='linear', dtick=1), barmode='group', height=400, hovermode="x unified")
-        st.plotly_chart(fig_year, use_container_width=True)
+        # [요구사항 1] dragmode=False 적용
+        fig_year.update_layout(
+            title=f"연도별 흐름 ({current_symbol})", 
+            xaxis=dict(tickmode='linear', dtick=1), 
+            barmode='group', height=400, hovermode="x unified",
+            dragmode=False
+        )
+        # config 적용
+        st.plotly_chart(fig_year, use_container_width=True, config=PLOT_CONFIG)
 
 else:
     st.info("데이터가 없습니다.")
@@ -336,7 +355,6 @@ else:
 # 7. 상세 내역 관리
 # -----------------------------------------------------------------------------
 st.divider()
-# [중요] 여기서 selected_year를 사용하는데, 위에서 초기화를 미리 해두었으므로 에러가 나지 않습니다.
 st.subheader(f"📝 {selected_year}년 상세 내역 관리")
 
 if not df.empty:
