@@ -45,7 +45,6 @@ CURRENCY_CONFIG = {
 DEFAULT_CATEGORIES = ['식비', '교통비', '쇼핑', '통신비', '주거비', '의료비', '월급', '보너스', '배당금', '기타']
 PASTEL_COLORS = px.colors.qualitative.Pastel
 
-# 차트 고정 설정
 PLOT_CONFIG = {
     'displayModeBar': False,
     'scrollZoom': False,
@@ -55,9 +54,13 @@ PLOT_CONFIG = {
 
 conn = st.connection("gsheets", type=GSheetsConnection)
 
+# [최적화 1] 데이터 로드 함수 캐싱 (ttl=600: 10분간 캐시 유지)
+# 데이터 변경(저장/삭제) 시에는 clear_cache()를 통해 초기화됨
+@st.cache_data(ttl=600)
 def load_data(sheet_name):
     try:
-        df = conn.read(worksheet=sheet_name, ttl=0)
+        # ttl=0 제거 (캐시 사용을 위해)
+        df = conn.read(worksheet=sheet_name)
         if df.empty:
             return pd.DataFrame(columns=['날짜', '구분', '카테고리', '금액', '메모'])
         
@@ -72,11 +75,14 @@ def load_data(sheet_name):
     except Exception as e:
         return pd.DataFrame(columns=['날짜', '구분', '카테고리', '금액', '메모'])
 
+# [최적화 2] 데이터 저장 시 캐시 비우기
 def save_data(df, sheet_name):
     try:
         df_save = df.copy()
         df_save['날짜'] = df_save['날짜'].dt.strftime('%Y-%m-%d')
         conn.update(worksheet=sheet_name, data=df_save)
+        # 데이터가 변경되었으므로 캐시를 비웁니다.
+        load_data.clear()
     except Exception as e:
         st.error(f"저장 실패: {e}")
 
@@ -88,6 +94,8 @@ def parse_currency(value_str):
         return int(float(cleaned))
     except: return 0
 
+# [최적화 3] 환율 정보도 자주 바뀌지 않으므로 캐싱 (1시간)
+@st.cache_data(ttl=3600)
 def get_exchange_rates_krw_base():
     try:
         url = "https://open.er-api.com/v6/latest/USD"
@@ -107,7 +115,6 @@ def get_exchange_rates_krw_base():
 # 3. 초기화 및 데이터 로드
 # -----------------------------------------------------------------------------
 st.title("📒 가계부")
-# [요구사항 2] Version 정보 추가
 st.markdown("""
 <div class='developer-credit'>
     Version 1.0<br>
@@ -119,8 +126,6 @@ if 'current_currency_code' not in st.session_state:
     st.session_state['current_currency_code'] = "KRW"
 if 'custom_categories' not in st.session_state:
     st.session_state['custom_categories'] = []
-if 'rates' not in st.session_state:
-    st.session_state['rates'] = get_exchange_rates_krw_base()
 
 # 입력 폼 초기화를 위한 Session State
 if 'input_amount' not in st.session_state: st.session_state['input_amount'] = "0"
@@ -143,7 +148,10 @@ current_config = CURRENCY_CONFIG[st.session_state['current_currency_code']]
 current_symbol = current_config['symbol']
 current_sheet = current_config['sheet_name']
 
+# 캐시된 함수 호출 (속도 향상)
 df = load_data(current_sheet)
+# 환율 정보 호출
+api_usd_krw, api_twd_krw = get_exchange_rates_krw_base()
 
 existing_cats = []
 if not df.empty and '카테고리' in df.columns:
@@ -155,23 +163,21 @@ final_categories = sorted(list(set(DEFAULT_CATEGORIES + existing_cats + st.sessi
 # -----------------------------------------------------------------------------
 with st.sidebar:
     st.header("🗂️ 메뉴")
-    # [요구사항 3] 자산 현황을 앞으로, 설정을 뒤로 변경
     tab_assets, tab_settings = st.tabs(["💱 자산 현황", "⚙️ 설정"])
     
     with tab_assets:
         st.subheader("환율 정보")
         if st.button("🔄 환율 새로고침"):
-            st.session_state['rates'] = get_exchange_rates_krw_base()
+            get_exchange_rates_krw_base.clear() # 환율 캐시만 초기화
             st.rerun()
 
-        api_usd_krw, api_twd_krw = st.session_state['rates']
         col_r1, col_r2 = st.columns(2)
         col_r1.metric("USD/KRW", f"{api_usd_krw:.2f}")
         col_r2.metric("TWD/KRW", f"{api_twd_krw:.2f}")
         
         st.divider()
         
-        # 1. 각 계좌별 잔액 계산
+        # 1. 각 계좌별 잔액 계산 (캐시 덕분에 매우 빨라짐)
         net_assets = {}
         for code, conf in CURRENCY_CONFIG.items():
             _df = load_data(conf['sheet_name'])
@@ -187,8 +193,6 @@ with st.sidebar:
         net_usd = net_assets['USD']
         
         st.subheader("🏦 통화별 보유 잔액")
-        
-        # 글자 크기 조정 (HTML/CSS)
         st.markdown(f"<span style='font-size:16px;'>🇰🇷 KRW: <b>{net_krw:,.0f}</b> 원</span>", unsafe_allow_html=True)
         st.markdown(f"<span style='font-size:16px;'>🇹🇼 TWD: <b>{net_twd:,.0f}</b> NT$</span>", unsafe_allow_html=True)
         st.markdown(f"<span style='font-size:16px;'>🇺🇸 USD: <b>{net_usd:,.2f}</b> $</span>", unsafe_allow_html=True)
@@ -253,6 +257,7 @@ with st.expander("입력창 열기", expanded=True):
                     '메모': new_memo
                 }])
                 updated_df = pd.concat([df, new_row], ignore_index=True)
+                # 저장 시 자동으로 load_data.clear() 호출됨
                 save_data(updated_df, current_sheet)
                 
                 st.toast("✅ 정상적으로 저장되었습니다!", icon="💾")
@@ -394,7 +399,6 @@ if not df.empty:
         summary_total = summary_inc - summary_exp
         
         sm1, sm2, sm3 = st.columns(3)
-        # [요구사항 1] 통화 단위(current_symbol) 추가
         sm1.metric("➕ 총 수입", f"{current_symbol} {summary_inc:,.0f}")
         sm2.metric("➖ 총 지출", f"{current_symbol} {summary_exp:,.0f}")
         sm3.metric("💰 도합", f"{current_symbol} {summary_total:,.0f}", delta=f"{current_symbol} {summary_total:,.0f}")
@@ -433,6 +437,7 @@ if not df.empty:
                 if not rows_to_delete.empty:
                     delete_indices = rows_to_delete.index
                     df.drop(delete_indices, inplace=True)
+                    # 삭제 시에도 자동으로 캐시 초기화됨
                     save_data(df, current_sheet)
                     st.toast("✅ 삭제되었습니다.", icon="🗑️")
                     st.rerun()
